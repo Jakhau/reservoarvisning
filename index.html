@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reservoarvisning</title>
+<style>
+  :root {
+    --bg3d: #eef1f4; --flate: #ffffffee; --flate2: #f3f5f7; --kant: #d5dae0;
+    --tekst: #17202a; --dempet: #5d6b7a; --aksent: #0b6bcb; --aksent-tekst: #ffffff;
+    --feil: #b3261e; --cellekant: #1b2430; --markor: #ff2d7a; --skygge: 0 6px 24px rgba(20,30,45,.14);
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg3d: #12161b; --flate: #1b2128ee; --flate2: #242b34; --kant: #343d48;
+      --tekst: #e8edf2; --dempet: #98a5b3; --aksent: #5aa9ff; --aksent-tekst: #0b1622;
+      --feil: #ff8a80; --cellekant: #05080b; --markor: #ff5c9a; --skygge: 0 6px 24px rgba(0,0,0,.5);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg3d); color: var(--tekst);
+    font: 13px/1.4 system-ui, "Segoe UI", Roboto, sans-serif; }
+  #scene { position: fixed; inset: 0; display: block; width: 100%; height: 100%; }
+  .kort { background: var(--flate); border: 1px solid var(--kant); border-radius: 10px;
+    box-shadow: var(--skygge); backdrop-filter: blur(8px); }
+  #panel { position: fixed; top: 12px; left: 12px; width: 280px; max-height: calc(100% - 24px);
+    overflow: auto; padding: 14px; display: none; }
+  h1 { font-size: 14px; margin: 0 0 2px; font-weight: 650; }
+  #modellnavn { color: var(--dempet); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dempet);
+    margin: 16px 0 6px; font-weight: 600; }
+  label { display: block; }
+  .rad { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
+  .rad > span:first-child { width: 14px; font-weight: 600; }
+  .rad output { width: 62px; text-align: right; font-variant-numeric: tabular-nums; color: var(--dempet); }
+  .dobbel { flex: 1; display: grid; }
+  input[type=range] { width: 100%; margin: 1px 0; accent-color: var(--aksent); }
+  select, input[type=number], button { font: inherit; color: var(--tekst); background: var(--flate2);
+    border: 1px solid var(--kant); border-radius: 6px; padding: 5px 8px; }
+  select { width: 100%; }
+  input[type=number] { width: 100%; min-width: 0; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--aksent); }
+  button.primar { background: var(--aksent); color: var(--aksent-tekst); border-color: var(--aksent); font-weight: 600; }
+  :focus-visible { outline: 2px solid var(--aksent); outline-offset: 1px; }
+  .to { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .kryss { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+  .knapper { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
+  #legende { margin-top: 8px; }
+  #legende canvas { width: 100%; height: 12px; border-radius: 3px; display: block; border: 1px solid var(--kant); }
+  #legende div { display: flex; justify-content: space-between; color: var(--dempet);
+    font-variant-numeric: tabular-nums; font-size: 12px; margin-top: 2px; }
+  #status { position: fixed; right: 12px; bottom: 12px; padding: 6px 10px; color: var(--dempet);
+    font-variant-numeric: tabular-nums; display: none; }
+  #celle { position: fixed; right: 12px; top: 12px; padding: 12px 14px; min-width: 190px; display: none; }
+  #celle table { border-collapse: collapse; width: 100%; }
+  #celle td { padding: 1px 0; font-variant-numeric: tabular-nums; }
+  #celle td:last-child { text-align: right; padding-left: 16px; }
+  #celle td:first-child { color: var(--dempet); }
+  #velkommen { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; }
+  #velkommen .kort { padding: 28px 32px; max-width: 460px; text-align: center; }
+  #velkommen h1 { font-size: 20px; margin-bottom: 8px; }
+  #velkommen p { color: var(--dempet); margin: 0 0 18px; }
+  #velkommen .knapper { justify-content: center; }
+  #feil { color: var(--feil); margin-top: 12px; display: none; }
+  #slipp { position: fixed; inset: 8px; border: 2px dashed var(--aksent); border-radius: 14px;
+    display: none; place-items: center; font-size: 18px; font-weight: 600; color: var(--aksent);
+    background: color-mix(in srgb, var(--bg3d) 80%, transparent); pointer-events: none; }
+  #opptatt { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); padding: 6px 14px; display: none; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<aside id="panel" class="kort">
+  <h1>Reservoarvisning</h1>
+  <div id="modellnavn"></div>
+
+  <h2>Egenskap</h2>
+  <select id="egenskap" aria-label="Egenskap"></select>
+  <div id="legende"><canvas width="256" height="1"></canvas><div><span id="legMin"></span><span id="legMax"></span></div></div>
+  <div class="to" style="margin-top:8px">
+    <label>Fargeskala min<input type="number" id="cmin" step="any"></label>
+    <label>Fargeskala maks<input type="number" id="cmax" step="any"></label>
+  </div>
+  <div class="rad" style="gap:14px">
+    <label class="kryss"><input type="checkbox" id="logg">Logaritmisk</label>
+    <button id="auto" style="margin-left:auto">Tilbakestill</button>
+  </div>
+  <select id="fargekart" aria-label="Fargekart">
+    <option value="viridis">Viridis</option>
+    <option value="spektral">Spektral (blå–rød)</option>
+  </select>
+
+  <h2>Utsnitt (IJK)</h2>
+  <div class="rad"><span>I</span><div class="dobbel"><input type="range" id="i0" aria-label="I fra"><input type="range" id="i1" aria-label="I til"></div><output id="iUt"></output></div>
+  <div class="rad"><span>J</span><div class="dobbel"><input type="range" id="j0" aria-label="J fra"><input type="range" id="j1" aria-label="J til"></div><output id="jUt"></output></div>
+  <div class="rad"><span>K</span><div class="dobbel"><input type="range" id="k0" aria-label="K fra"><input type="range" id="k1" aria-label="K til"></div><output id="kUt"></output></div>
+
+  <h2>Filter på egenskap</h2>
+  <div class="to">
+    <label>Vis fra<input type="number" id="fmin" step="any" placeholder="ingen"></label>
+    <label>Vis til<input type="number" id="fmax" step="any" placeholder="ingen"></label>
+  </div>
+
+  <h2>Visning</h2>
+  <div class="rad"><span style="width:auto">Vertikal overdrivelse</span><input type="range" id="zs" min="1" max="20" step="0.5" value="5" aria-label="Vertikal overdrivelse"><output id="zsUt" style="width:34px"></output></div>
+  <label class="kryss"><input type="checkbox" id="kanter" checked>Cellekanter</label>
+
+  <div class="knapper">
+    <button id="tilpass">Tilpass visning</button>
+    <button id="apne">Åpne filer …</button>
+  </div>
+</aside>
+
+<div id="celle" class="kort"></div>
+<div id="status" class="kort"></div>
+<div id="opptatt" class="kort">Leser modell …</div>
+
+<div id="velkommen">
+  <div class="kort">
+    <h1>Reservoarvisning</h1>
+    <p>Slipp GRDECL-filer hvor som helst i vinduet. Består modellen av flere filer
+      (grid, ACTNUM, egenskaper), slipper du alle samtidig.</p>
+    <div class="knapper">
+      <button class="primar" id="velg">Velg filer …</button>
+      <button id="demo">Åpne eksempelmodell</button>
+    </div>
+    <div id="feil" role="alert"></div>
+  </div>
+</div>
+<div id="slipp">Slipp filene for å åpne modellen</div>
+<input type="file" id="fil" multiple hidden>
+
+<script src="src/vendor/three.min.js"></script>
+<script src="src/vendor/OrbitControls.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>
