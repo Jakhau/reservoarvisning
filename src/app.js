@@ -67,7 +67,20 @@
       }`
   });
 
-  let mesh = null, markor = null;
+  // Lys for brønnrørene (cellene har egen skyggelegging i shaderen).
+  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+  const sol = new THREE.DirectionalLight(0xffffff, 0.55);
+  sol.position.set(0.4, 1, 0.6);
+  scene.add(sol);
+  const bronnGruppe = new THREE.Group();   // skaleres ikke: rørene bygges med overdrivelsen innbakt
+  scene.add(bronnGruppe);
+  const forkastMat = new THREE.MeshBasicMaterial({
+    side: THREE.DoubleSide, transparent: true, opacity: 0.6, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4
+  });
+  const etiketter = [];
+
+  let mesh = null, markor = null, forkastMesh = null;
   let tegn = true;
   styring.addEventListener('change', () => { tegn = true; });
 
@@ -75,6 +88,8 @@
     renderer.setClearColor(new THREE.Color(css('--bg3d')));
     materiale.uniforms.kantfarge.value.set(css('--cellekant'));
     if (markor) markor.material.color.set(css('--markor'));
+    forkastMat.color.set(css('--forkast'));
+    if (grid) byggBronner();
     tegn = true;
   }
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', tema);
@@ -95,7 +110,7 @@
   (function lokke() {
     requestAnimationFrame(lokke);
     styring.update();
-    if (tegn) { tegn = false; renderer.render(scene, kamera); }
+    if (tegn) { tegn = false; renderer.render(scene, kamera); plasserEtiketter(); }
   })();
 
   // ---------- tilstand ----------
@@ -159,6 +174,16 @@
       $(a + '0').value = 1; $(a + '1').value = n;
     }
     $('fmin').value = ''; $('fmax').value = '';
+    $('visGrid').checked = $('visForkast').checked = $('visBronner').checked = true;
+    if (mesh) mesh.visible = true;
+    bronnGruppe.visible = true;
+    $('etiketter').style.display = '';
+    byggForkast();
+    byggBronner();
+    $('radForkast').style.display = m.forkast.antFlater ? '' : 'none';
+    $('tekstForkast').textContent = 'Forkastninger (' + m.forkast.navn.length + ')';
+    $('radBronner').style.display = $('forklaringBronner').style.display = m.bronner.length ? '' : 'none';
+    $('tekstBronner').textContent = 'Brønner (' + m.bronner.length + ')';
     oppdaterUtsnittTekst();
     velgEgenskap(true);
     forste = true;
@@ -223,6 +248,66 @@
     }
     mesh.geometry.attributes.verdi.needsUpdate = true;
     tegn = true;
+  }
+
+  // ---------- forkastninger og brønner ----------
+  function byggForkast() {
+    if (forkastMesh) { gruppe.remove(forkastMesh); forkastMesh.geometry.dispose(); forkastMesh = null; }
+    const f = grid.forkast;
+    if (!f.antFlater) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(f.pos, 3));
+    geo.setIndex(new THREE.BufferAttribute(f.idx, 1));
+    forkastMesh = new THREE.Mesh(geo, forkastMat);
+    forkastMesh.frustumCulled = false;
+    forkastMesh.renderOrder = 2;
+    gruppe.add(forkastMesh);
+  }
+
+  // Brønnene tegnes som rør. De bygges på nytt når overdrivelsen endres, slik at tverrsnittet
+  // forblir rundt. Hvert rør tegnes også svakt gjennom cellene, så banen kan følges inne i modellen.
+  function byggBronner() {
+    for (const o of bronnGruppe.children.slice()) { bronnGruppe.remove(o); o.geometry.dispose(); o.material.dispose(); }
+    $('etiketter').innerHTML = '';
+    etiketter.length = 0;
+    if (!grid || !grid.bronner.length) return;
+    const zs = +$('zs').value, b = grid.bbox;
+    const radius = 0.0013 * Math.hypot(b.x1 - b.x0, b.y1 - b.y0);
+    for (const w of grid.bronner) {
+      const pkt = [];
+      for (let i = 0; i < w.punkter.length; i += 3) {
+        const v = new THREE.Vector3(w.punkter[i], w.punkter[i + 1] * zs, w.punkter[i + 2]);
+        if (!pkt.length || pkt[pkt.length - 1].distanceToSquared(v) > 1e-6) pkt.push(v);
+      }
+      if (pkt.length < 2) continue;
+      const kurve = new THREE.CatmullRomCurve3(pkt, false, 'catmullrom', 0);   // spenning 0 = rette strekk
+      const geo = new THREE.TubeGeometry(kurve, (pkt.length - 1) * 6, radius, 8, false);
+      const farge = css(w.type === 'I' ? '--inj' : '--prod');
+      const ror = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: farge }));
+      const gjennom = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: farge, transparent: true, opacity: 0.22, depthTest: false, depthWrite: false }));
+      gjennom.renderOrder = 5;
+      bronnGruppe.add(ror, gjennom);
+      const el = document.createElement('div');
+      el.className = 'etikett ' + (w.type === 'I' ? 'inj' : 'prod');
+      el.textContent = w.navn;
+      $('etiketter').appendChild(el);
+      etiketter.push({ el, pos: pkt[0] });
+    }
+    tegn = true;
+  }
+
+  const projisert = new THREE.Vector3();
+  function plasserEtiketter() {
+    if (!etiketter.length) return;
+    const w = window.innerWidth, h = window.innerHeight;
+    for (const e of etiketter) {
+      projisert.copy(e.pos).project(kamera);
+      if (projisert.z > 1 || projisert.z < -1) { e.el.style.display = 'none'; continue; }
+      e.el.style.display = '';
+      e.el.style.transform = 'translate(' + ((projisert.x + 1) / 2 * w).toFixed(1) + 'px,' +
+        ((1 - projisert.y) / 2 * h).toFixed(1) + 'px) translate(-50%,-115%)';
+    }
   }
 
   // ---------- egenskap og fargeskala ----------
@@ -299,6 +384,7 @@
     const zs = +$('zs').value;
     gruppe.scale.y = zs;
     $('zsUt').textContent = zs + '×';
+    if (grid) byggBronner();
     tegn = true;
   }
 
@@ -325,8 +411,20 @@
     if (!ned || !mesh || Math.hypot(e.clientX - ned[0], e.clientY - ned[1]) > 4) return;
     const r = canvas.getBoundingClientRect();
     stråle.setFromCamera({ x: (e.clientX - r.left) / r.width * 2 - 1, y: -(e.clientY - r.top) / r.height * 2 + 1 }, kamera);
-    const treff = stråle.intersectObject(mesh)[0];
-    if (!treff) { fjernMarkor(); $('celle').style.display = 'none'; return; }
+    const treff = mesh.visible ? stråle.intersectObject(mesh)[0] : null;
+    if (!treff) {
+      fjernMarkor();
+      // Uten celletreff: se om klikket traff en forkastning (mest aktuelt når cellene er skjult).
+      const tf = forkastMesh && forkastMesh.visible ? stråle.intersectObject(forkastMesh)[0] : null;
+      if (!tf) { $('celle').style.display = 'none'; return; }
+      const dyp = grid.origo[2] - tf.point.y / gruppe.scale.y;
+      const tab = document.createElement('table');
+      tab.innerHTML = '<tr><td>Forkastning</td><td></td></tr><tr><td>Dybde</td><td>' + tall(dyp) + ' m</td></tr>';
+      tab.rows[0].cells[1].textContent = grid.forkast.navn[grid.forkast.eier[tf.faceIndex >> 1]];
+      $('celle').replaceChildren(tab);
+      $('celle').style.display = 'block';
+      return;
+    }
     const f = treff.faceIndex >> 1, c = hud.celle[f];
     const i = c % grid.nx, j = Math.floor(c / grid.nx) % grid.ny, k = Math.floor(c / (grid.nx * grid.ny));
     const dybde = grid.origo[2] - treff.point.y / gruppe.scale.y;
@@ -371,6 +469,13 @@
   $('fmax').addEventListener('input', bestillHud);
   $('zs').addEventListener('input', overdrivelse);
   $('kanter').addEventListener('change', () => { materiale.uniforms.kanter.value = $('kanter').checked ? 1 : 0; tegn = true; });
+  $('visGrid').addEventListener('change', () => { if (mesh) mesh.visible = $('visGrid').checked; fjernMarkor(); tegn = true; });
+  $('visForkast').addEventListener('change', () => { if (forkastMesh) forkastMesh.visible = $('visForkast').checked; tegn = true; });
+  $('visBronner').addEventListener('change', () => {
+    bronnGruppe.visible = $('visBronner').checked;
+    $('etiketter').style.display = $('visBronner').checked ? '' : 'none';
+    tegn = true;
+  });
   $('tilpass').addEventListener('click', tilpass);
   $('apne').addEventListener('click', () => $('fil').click());
   $('velg').addEventListener('click', () => $('fil').click());

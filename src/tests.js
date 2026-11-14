@@ -186,5 +186,61 @@ test('ytelse: 1 million celler hudlegges på under 2 s', () => {
   if (ms > 2000) throw new Error(ms + ' ms');
 });
 
+// --- Forkastninger og brønner ---
+test('parse: poster med tekst, tall og standardverdier fanges', () => {
+  const kw = GRDECL.parseTekst(
+    "FAULTS\n-- navn\n 'F 1' 2 2 1 3 1 3 'X' /\n F2 1 1 1 1 1 3 Y- / kommentar\n/\n" +
+    "WELSPECS\n 'B-2H' 'G' 15 31 1* 'OIL' 2* 'STOP' /\n/\nPORO\n2*0.2 /\n");
+  const P = kw._poster;
+  lik(P.FAULTS.length, 2);
+  if (JSON.stringify(P.FAULTS[0]) !== '["F 1",2,2,1,3,1,3,"X"]') throw new Error(JSON.stringify(P.FAULTS[0]));
+  if (P.FAULTS[1][0] !== 'F2' || P.FAULTS[1][7] !== 'Y-') throw new Error(JSON.stringify(P.FAULTS[1]));
+  if (JSON.stringify(P.WELSPECS[0]) !== '["B-2H","G",15,31,null,"OIL",null,null,"STOP"]') throw new Error(JSON.stringify(P.WELSPECS[0]));
+  lik(kw.PORO.length, 2, 0, 'nøkkelordet etter postlista');
+});
+
+test('forkastning: X-flate i 3×3×3 gir 9 loddrette flater på riktig sted', () => {
+  const g = GRID.lagGrid(GRDECL.parseTekst(boksTekst(3, 3, 3)));
+  const f = GRID.forkastninger(g, [['F1', 2, 2, 1, 3, 1, 3, 'X'], ['F1', 1, 1, 1, 1, 1, 1, 'Z'], ['Ukjent', 1, 1, 1, 1, 1, 1, 'Q']]);
+  lik(f.navn.length, 1); lik(f.antFlater, 10); lik(f.pos.length, 120);
+  // I+-flaten til celle I=2 ligger på x = 200 m, altså 50 m øst for midten (150 m).
+  for (let v = 0; v < 36; v++) lik(f.pos[3 * v], 50, 1e-4, 'x på forkastningsplanet');
+});
+
+test('forkastning: flater uten aktiv celle på noen side utelates', () => {
+  const g = GRID.lagGrid(GRDECL.parseTekst(boksTekst(3, 1, 1, 'ACTNUM\n0 0 1 /\n')));
+  lik(GRID.forkastninger(g, [['A', 1, 1, 1, 1, 1, 1, 'X']]).antFlater, 0, 0, 'begge sider inaktive');
+  const f = GRID.forkastninger(g, [['B', 2, 2, 1, 1, 1, 1, 'X']]);
+  lik(f.antFlater, 1, 0, 'nabo aktiv');
+  // Flaten hentes fra den aktive naboen (I=3, vestflaten på x = 200 m, 50 m øst for midten).
+  for (let v = 0; v < 4; v++) lik(f.pos[3 * v], 50, 1e-4, 'x fra naboens flate');
+});
+
+test('brønn: bane gjennom cellesentre, standard-IJ fra brønnhodet og type fra WCON*', () => {
+  const g = GRID.lagGrid(GRDECL.parseTekst(boksTekst(3, 3, 3)));
+  const b = GRID.bronner(g, {
+    WELSPECS: [['P1', 'G', 2, 2], ['I1', 'G', 1, 1], ['TOM', 'G', 3, 3]],
+    COMPDAT: [['P1', null, null, 1, 3], ['P1', 2, 2, 3, 3], ['I1', 3, 1, 2, 2], ['UKJENT', 1, 1, 1, 1]],
+    WCONHIST: [['P1', 'OPEN'], ['I1', 'OPEN']], WCONINJE: [['I1', 'WATER']]
+  });
+  lik(b.length, 2, 0, 'brønner uten koblinger utelates');
+  const p = b[0];
+  lik(p.antKoblinger, 3, 0, 'dobbel kobling telles én gang'); lik(p.punkter.length, 12);
+  if (p.type !== 'P' || b[1].type !== 'I' || b[1].fase !== 'WATER') throw new Error('feil type');
+  // Midtkolonnen: x = z = 0. Lagene ligger på 1505, 1515 og 1525 m; midten av modellen er 1515 m.
+  lik(p.punkter[3], 0, 1e-4); lik(p.punkter[5], 0, 1e-4);
+  lik(p.punkter[4], 10, 1e-3, 'lag 1'); lik(p.punkter[7], 0, 1e-3, 'lag 2'); lik(p.punkter[10], -10, 1e-3, 'lag 3');
+  if (!(p.punkter[1] > 15)) throw new Error('toppunktet skal ligge over modellen');
+  lik(b[1].punkter[3], 100, 1e-4, 'I1 koblet til I=3');
+});
+
+test('syntetisk modell har forkastning og to brønner', () => {
+  const kw = GRID.syntetisk(20, 24, 6), g = GRID.lagGrid(kw);
+  const f = GRID.forkastninger(g, kw._poster.FAULTS), b = GRID.bronner(g, kw._poster);
+  if (!(f.antFlater > 50)) throw new Error('forkastningsflater: ' + f.antFlater);
+  lik(b.length, 2);
+  if (b[0].type !== 'P' || b[1].type !== 'I') throw new Error('feil brønntyper');
+});
+
 console.log(ok + ' av ' + (ok + feil) + ' tester besto');
 process.exit(feil ? 1 : 0);

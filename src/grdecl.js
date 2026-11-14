@@ -9,9 +9,15 @@
   // Disse hoppes over; de endrer egenskaper i bokser/regioner og er ikke støttet ennå.
   const POSTLISTE = new Set([
     'EQUALS', 'COPY', 'MULTIPLY', 'ADD', 'MINVALUE', 'MAXVALUE', 'OPERATE', 'OPERATER',
-    'EQUALREG', 'COPYREG', 'MULTIREG', 'ADDREG', 'FAULTS', 'MULTFLT', 'NNC', 'EDITNNC',
-    'MULTREGT', 'AQUNUM', 'AQUCON', 'THPRESFT', 'PINCHREG'
+    'EQUALREG', 'COPYREG', 'MULTIREG', 'ADDREG', 'MULTFLT', 'NNC', 'EDITNNC',
+    'MULTREGT', 'AQUNUM', 'AQUCON', 'THPRESFT', 'PINCHREG',
+    'WELOPEN', 'WRFTPLT', 'WTRACER', 'WTEST', 'WPAVE', 'GRUPTREE', 'GCONINJE', 'GCONPROD',
+    'WELTARG', 'WECON', 'WGRUPCON', 'WELSEGS', 'COMPSEGS', 'WSEGVALV', 'COMPLUMP', 'WPIMULT'
   ]);
+
+  // Postlister som tas vare på: forkastninger og brønner. Hver post blir en liste med
+  // tall, tekster og null (for standardverdier, "1*"). Lagres i ut._poster[nøkkelord].
+  const FANG = new Set(['FAULTS', 'WELSPECS', 'COMPDAT', 'WCONHIST', 'WCONPROD', 'WCONINJE', 'WCONINJH']);
 
   const P10 = new Float64Array(23);
   for (let i = 0; i < 23; i++) P10[i] = Math.pow(10, i);
@@ -64,8 +70,10 @@
     const n = b.length;
     let p = 0;
     let navn = null, buf = null, len = 0;
-    let modus = 0;   // 0 = utenfor data, 1 = talldata, 2 = hopp til "/", 3 = postliste
+    let modus = 0;   // 0 = utenfor data, 1 = talldata, 2 = hopp til "/", 3 = postliste, 4 = postliste som fanges
     let iPost = 0;
+    let post = null, poster = null;
+    const tekst = (s, e) => { let t = ''; for (let i = s; i < e; i++) t += String.fromCharCode(b[i]); return t; };
 
     function avslutt() {
       if (navn && len > 0) {
@@ -85,13 +93,18 @@
       }
       if (c === 47) {
         if (modus === 3) { if (iPost === 0) modus = 0; iPost = 0; }
+        else if (modus === 4) {
+          if (post.length === 0) modus = 0;
+          else { poster.push(post); post = []; }
+        }
         else { avslutt(); modus = 0; }
         while (p < n && b[p] !== 10) p++;   // resten av linja etter "/" er kommentar
         continue;
       }
       if (c === 39 || c === 34) {
-        p++;
+        const q = ++p;
         while (p < n && b[p] !== c && b[p] !== 10) p++;
+        if (modus === 4) post.push(tekst(q, p).trim());
         p++;
         if (modus === 3) iPost++;
         continue;
@@ -106,15 +119,27 @@
       }
       if (modus === 2) continue;
       if (modus === 3) { iPost++; continue; }
+      if (modus === 4) {
+        if (stjerne === p - 1) {   // "3*": tre standardverdier
+          const ant = stjerne > s ? flyt(b, s, stjerne) : NaN;
+          if (ant === ant) { for (let i = 0; i < ant; i++) post.push(null); continue; }
+        }
+        const v = flyt(b, s, p);
+        post.push(v === v ? v : tekst(s, p));
+        continue;
+      }
 
       const c0 = b[s];
       if ((c0 >= 65 && c0 <= 90) || (c0 >= 97 && c0 <= 122)) {
         avslutt();
-        let t = '';
-        for (let i = s; i < p; i++) t += String.fromCharCode(b[i]);
-        t = t.toUpperCase();
+        const t = tekst(s, p).toUpperCase();
         if (t === 'INCLUDE') modus = 2;
         else if (POSTLISTE.has(t)) { modus = 3; iPost = 0; }
+        else if (FANG.has(t)) {
+          modus = 4; post = [];
+          const alle = ut._poster || (ut._poster = {});
+          poster = alle[t] || (alle[t] = []);
+        }
         else {
           modus = 1; navn = t; len = 0;
           // COORD kan ha UTM-koordinater (7 siffer før komma) og trenger dobbel presisjon.

@@ -8,14 +8,16 @@
   :root {
     --bg3d: #eef1f4; --flate: #ffffffee; --flate2: #f3f5f7; --kant: #d5dae0;
     --tekst: #17202a; --dempet: #5d6b7a; --aksent: #0b6bcb; --aksent-tekst: #ffffff;
-    --feil: #b3261e; --cellekant: #1b2430; --markor: #ff2d7a; --skygge: 0 6px 24px rgba(20,30,45,.14);
+    --feil: #b3261e; --cellekant: #1b2430; --markor: #ff2d7a;
+    --prod: #1a8f3c; --inj: #1668d6; --forkast: #d9480f; --skygge: 0 6px 24px rgba(20,30,45,.14);
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg3d: #12161b; --flate: #1b2128ee; --flate2: #242b34; --kant: #343d48;
       --tekst: #e8edf2; --dempet: #98a5b3; --aksent: #5aa9ff; --aksent-tekst: #0b1622;
-      --feil: #ff8a80; --cellekant: #05080b; --markor: #ff5c9a; --skygge: 0 6px 24px rgba(0,0,0,.5);
+      --feil: #ff8a80; --cellekant: #05080b; --markor: #ff5c9a;
+      --prod: #4fd67a; --inj: #6db3ff; --forkast: #ff7a3d; --skygge: 0 6px 24px rgba(0,0,0,.5);
     }
   }
   * { box-sizing: border-box; }
@@ -67,11 +69,20 @@
   #slipp { position: fixed; inset: 8px; border: 2px dashed var(--aksent); border-radius: 14px;
     display: none; place-items: center; font-size: 18px; font-weight: 600; color: var(--aksent);
     background: color-mix(in srgb, var(--bg3d) 80%, transparent); pointer-events: none; }
+  #etiketter { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  .etikett { position: absolute; left: 0; top: 0; padding: 0 5px; border-radius: 4px; font-size: 11px; font-weight: 600;
+    white-space: nowrap; background: var(--flate); border: 1px solid currentColor; will-change: transform; }
+  .etikett.prod, .prikk.prod { color: var(--prod); }
+  .etikett.inj, .prikk.inj { color: var(--inj); }
+  .prikk.forkast::before { color: var(--forkast); }
+  .prikk::before { content: "\25CF"; margin-right: 4px; }
+  .forklaring { color: var(--dempet); font-size: 12px; margin: -2px 0 4px 22px; display: flex; gap: 10px; }
   #opptatt { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); padding: 6px 14px; display: none; }
 </style>
 </head>
 <body>
 <canvas id="scene"></canvas>
+<div id="etiketter"></div>
 
 <aside id="panel" class="kort">
   <h1>Reservoarvisning</h1>
@@ -106,7 +117,11 @@
 
   <h2>Visning</h2>
   <div class="rad"><span style="width:auto">Vertikal overdrivelse</span><input type="range" id="zs" min="1" max="20" step="0.5" value="5" aria-label="Vertikal overdrivelse"><output id="zsUt" style="width:34px"></output></div>
+  <label class="kryss"><input type="checkbox" id="visGrid" checked>Celler</label>
   <label class="kryss"><input type="checkbox" id="kanter" checked>Cellekanter</label>
+  <label class="kryss" id="radForkast"><input type="checkbox" id="visForkast" checked><span class="prikk forkast" id="tekstForkast">Forkastninger</span></label>
+  <label class="kryss" id="radBronner"><input type="checkbox" id="visBronner" checked><span id="tekstBronner">Brønner</span></label>
+  <div class="forklaring" id="forklaringBronner"><span class="prikk prod">produsent</span><span class="prikk inj">injektor</span></div>
 
   <div class="knapper">
     <button id="tilpass">Tilpass visning</button>

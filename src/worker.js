@@ -5,14 +5,18 @@ importScripts('grdecl.js', 'grid.js');
 
 let g = null;
 
-function sendGrid(t0, navn) {
+function sendGrid(t0, navn, poster) {
+  const fk = GRID.forkastninger(g, poster && poster.FAULTS);
+  const fa = GRID.flateAttributter(fk.antFlater);
+  const forkast = { navn: fk.navn, pos: fk.pos, eier: fk.eier, idx: fa.idx, antFlater: fk.antFlater };
+  const bronner = GRID.bronner(g, poster);
   const props = {};
   for (const p of Object.keys(g.props)) {
     props[p] = Object.assign({ data: g.props[p] }, GRID.statistikk(g, g.props[p]));
   }
   postMessage({
     type: 'grid', navn, nx: g.nx, ny: g.ny, nz: g.nz, antAktive: g.antAktive,
-    bbox: g.bbox, origo: g.origo, props, tid: performance.now() - t0
+    bbox: g.bbox, origo: g.origo, props, forkast, bronner, tid: performance.now() - t0
   });
 }
 
@@ -24,10 +28,11 @@ onmessage = function (e) {
       const kw = {};
       for (const f of m.filer) GRDECL.parse(new Uint8Array(f.buf), kw);
       g = GRID.lagGrid(kw);
-      sendGrid(t0, m.filer.map(f => f.navn).join(', '));
+      sendGrid(t0, m.filer.map(f => f.navn).join(', '), kw._poster);
     } else if (m.type === 'demo') {
-      g = GRID.lagGrid(GRID.syntetisk(m.nx, m.ny, m.nz));
-      sendGrid(t0, 'Eksempelmodell (syntetisk)');
+      const kw = GRID.syntetisk(m.nx, m.ny, m.nz);
+      g = GRID.lagGrid(kw);
+      sendGrid(t0, 'Eksempelmodell (syntetisk)', kw._poster);
     } else if (m.type === 'hud') {
       if (!g) return;
       const f = m.filter;
