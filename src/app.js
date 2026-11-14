@@ -83,6 +83,10 @@
     const w = window.innerWidth, h = window.innerHeight;
     renderer.setSize(w, h, false);
     kamera.aspect = w / h;
+    // Forskyv bildet slik at modellen sentreres i den frie flaten til høyre for panelet.
+    const panel = $('panel').offsetWidth;
+    if (panel && w > 720) kamera.setViewOffset(w, h, -(panel + 12) / 2, 0, w, h);
+    else kamera.clearViewOffset();
     kamera.updateProjectionMatrix();
     tegn = true;
   }
@@ -137,6 +141,7 @@
     $('velkommen').style.display = 'none';
     $('panel').style.display = 'block';
     $('status').style.display = 'block';
+    storrelse();
     $('celle').style.display = 'none';
     $('modellnavn').textContent = m.navn;
     $('modellnavn').title = m.navn;
@@ -272,11 +277,18 @@
 
   // ---------- kamera ----------
   function tilpass() {
-    const b = grid.bbox, zs = +$('zs').value;
-    const r = 0.5 * Math.hypot(b.x1 - b.x0, b.y1 - b.y0, (b.z1 - b.z0) * zs);
-    const avstand = r / Math.sin(kamera.fov * Math.PI / 360) * 1.05;
-    styring.target.set(0, 0, 0);
-    kamera.position.copy(new THREE.Vector3(-0.55, 0.6, 0.75).normalize().multiplyScalar(avstand));
+    if (!mesh) return;
+    // Tilpass til det som faktisk tegnes (pilarene kan dekke et mye større område enn de aktive cellene).
+    const zs = +$('zs').value;
+    mesh.geometry.computeBoundingBox();
+    const b = mesh.geometry.boundingBox;
+    const dx = b.max.x - b.min.x, dy = (b.max.y - b.min.y) * zs, dz = b.max.z - b.min.z;
+    const r = 0.5 * Math.hypot(dx, dy, dz) || 1;
+    const avstand = r / Math.sin(kamera.fov * Math.PI / 360) * 0.8;
+    styring.target.set((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2 * zs, (b.min.z + b.max.z) / 2);
+    // Se på tvers av modellens lengste horisontale akse, så den fyller skjermbredden.
+    const retning = dz > dx ? new THREE.Vector3(-0.8, 0.5, 0.33) : new THREE.Vector3(-0.33, 0.5, 0.8);
+    kamera.position.copy(retning.normalize().multiplyScalar(avstand)).add(styring.target);
     kamera.near = r / 200; kamera.far = r * 60;
     kamera.updateProjectionMatrix();
     styring.update();
