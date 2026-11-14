@@ -73,10 +73,12 @@
     return ut;
   }
 
-  // 'grid' (EGRID), 'restart' (UNRST) eller 'init'.
+  // 'grid' (EGRID), 'restart' (UNRST), 'init', 'smspec' eller 'unsmry'.
   function filtype(idx) {
     const navn = new Set(idx.map(p => p.navn));
     if (navn.has('GRIDHEAD') && navn.has('ZCORN')) return 'grid';
+    if (navn.has('KEYWORDS')) return 'smspec';
+    if (navn.has('PARAMS')) return 'unsmry';
     if (navn.has('SEQNUM')) return 'restart';
     if (navn.has('INTEHEAD')) return 'init';
     return 'ukjent';
@@ -97,7 +99,34 @@
     return steg;
   }
 
-  const ECLBIN = { bufferKilde, filKilde, erBinar, indeks, les, filtype, rapportsteg };
+  // Sammendragsdata (SMSPEC + UNSMRY): tidsserier for felt, grupper og brønner.
+  // SMSPEC beskriver vektorene (KEYWORDS, WGNAMES/NAMES, NUMS, UNITS) og startdato; UNSMRY har
+  // én PARAMS-post per ministeg med én verdi per vektor. Returnerer
+  // { start, tider (ms UTC), vektorer: [{ nokkel, navn, num, enhet }], serie(nr) → Float32Array }.
+  function sammendrag(spes, spesIdx, data, dataIdx) {
+    const post = n => spesIdx.find(p => p.navn === n);
+    const kw = les(spes, post('KEYWORDS'));
+    const pn = post('WGNAMES') || post('NAMES');
+    const navn = pn ? les(spes, pn) : [], nums = post('NUMS') ? les(spes, post('NUMS')) : [];
+    const enh = post('UNITS') ? les(spes, post('UNITS')) : [];
+    const sd = post('STARTDAT') ? les(spes, post('STARTDAT')) : [1, 1, 1970];
+    const start = Date.UTC(sd[2], sd[1] - 1, sd[0], sd[3] || 0, sd[4] || 0, (sd[5] || 0) / 1e6);
+    const nv = kw.length;
+    const vektorer = kw.map((k, i) => ({ nokkel: k, navn: !navn[i] || /^:\+/.test(navn[i]) ? '' : navn[i], num: nums[i] || 0, enhet: enh[i] || '' }));
+    const steg = dataIdx.filter(p => p.navn === 'PARAMS' && p.ant === nv);
+    const m = new Float32Array(steg.length * nv);
+    steg.forEach((p, s) => m.set(les(data, p), s * nv));
+    const serie = nr => { const ut = new Float32Array(steg.length); for (let s = 0; s < steg.length; s++) ut[s] = m[s * nv + nr]; return ut; };
+    // TIME er dager siden start (timer i LAB-enheter).
+    const it = kw.indexOf('TIME'), tider = new Float64Array(steg.length);
+    if (it >= 0) {
+      const t = serie(it), ms = /^HOUR/i.test(enh[it] || '') ? 3600e3 : 86400e3;
+      for (let s = 0; s < t.length; s++) tider[s] = start + t[s] * ms;
+    }
+    return { start, tider, vektorer, serie };
+  }
+
+  const ECLBIN = { bufferKilde, filKilde, erBinar, indeks, les, filtype, rapportsteg, sammendrag };
   root.ECLBIN = ECLBIN;
   if (typeof module !== 'undefined' && module.exports) module.exports = ECLBIN;
 })(typeof self !== 'undefined' ? self : globalThis);

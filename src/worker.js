@@ -9,6 +9,7 @@ let g = null;
 let dyn = null;          // { kilde, steg: [{ tid, poster }], navn: [..], aktiv: Int32Array }
 let tider = [];          // tidsaksen: rapportsteg fra UNRST, ellers datoene i SCHEDULE
 let sisteHud = null;     // { celle, verdiFlate } for siste flatesett
+let smry = null;         // sammendragsdata fra SMSPEC/UNSMRY, se ECLBIN.sammendrag
 const hurtig = new Map();   // nylig leste dynamiske tabeller
 const statistikker = new Map();
 
@@ -24,8 +25,22 @@ function hentProp(navn, steg) {
   const ut = new Float32Array(g.n).fill(NaN), post = dyn.steg[s].poster[navn];
   if (post && post.ant === dyn.aktiv.length) {
     const a = ECLBIN.les(dyn.kilde, post);
-    for (let q = 0; q < a.length; q++) ut[dyn.aktiv[q]] = a[q];
+    const f = GRID.enhetFaktor(navn, g.enhet);
+    for (let q = 0; q < a.length; q++) ut[dyn.aktiv[q]] = a[q] * f;
   }
+  if (hurtig.size >= 6) hurtig.delete(hurtig.keys().next().value);
+  hurtig.set(nokkel, ut);
+  return ut;
+}
+
+// Det som vises: egenskapen selv, eller endringen siden et referansesteg (verdi − referanse).
+function hentVist(navn, steg, ref) {
+  const a = hentProp(navn, steg);
+  if (ref == null || !a || !erDynamisk(navn)) return a;
+  const nokkel = navn + '|' + steg + '−' + ref;
+  if (hurtig.has(nokkel)) return hurtig.get(nokkel);
+  const b = hentProp(navn, ref), ut = new Float32Array(g.n);
+  for (let c = 0; c < g.n; c++) ut[c] = a[c] - b[c];
   if (hurtig.size >= 6) hurtig.delete(hurtig.keys().next().value);
   hurtig.set(nokkel, ut);
   return ut;
@@ -33,9 +48,12 @@ function hentProp(navn, steg) {
 
 // Statistikk for en egenskap. For dynamiske egenskaper gjelder min/maks alle tidssteg (så
 // fargeskalaen står stille når tiden endres), mens histogrammet gjelder valgt steg.
-function stat(navn, steg) {
+function stat(navn, steg, ref) {
   const a = hentProp(navn, steg);
   if (!a) return null;
+  // Endring: statistikk for differansen i valgt steg; fortegnet gjør logskala meningsløs.
+  if (ref != null && erDynamisk(navn))
+    return Object.assign({}, GRID.statistikk(g, hentVist(navn, steg, ref)), { unike: null, minPos: null, histLog: null, endring: true });
   if (!erDynamisk(navn)) {
     if (!statistikker.has(navn)) statistikker.set(navn, GRID.statistikk(g, a));
     return statistikker.get(navn);
@@ -54,7 +72,8 @@ function stat(navn, steg) {
         if (x > 0 && x < minPos) minPos = x;
       }
     }
-    statistikker.set(navn, { min, max, minPos: minPos === Infinity ? null : minPos });
+    const f = GRID.enhetFaktor(navn, g.enhet);
+    statistikker.set(navn, { min: min * f, max: max * f, minPos: minPos === Infinity ? null : minPos * f });
   }
   const alle = statistikker.get(navn);
   return Object.assign({}, s, { histMin: s.min, histMax: s.max, histMinPos: s.minPos, min: alle.min, max: alle.max, minPos: alle.minPos, unike: null });
@@ -73,6 +92,45 @@ function verdierPerHjorne(celle, a, verdiFlate) {
 function metning(steg) {
   for (const n of ['SWAT', 'SWATINIT', 'SWL']) { const a = hentProp(n, steg); if (a) return { a, navn: n }; }
   return null;
+}
+
+// Kurvene som vises for en brønn (W…) eller for feltet (F…), gruppert i delfigurer med felles
+// enhet. Historiske verdier (…H) tegnes stiplet ved siden av de simulerte.
+const KURVER = [
+  { tittel: 'Olje og vann', enhet: 'SM3/DAY', serier: [['OPR', 'Olje', 'olje'], ['WPR', 'Vann', 'vann']] },
+  { tittel: 'Gass', enhet: 'SM3/DAY', serier: [['GPR', 'Gass', 'gass']] },
+  { tittel: 'Vanninjeksjon', enhet: 'SM3/DAY', serier: [['WIR', 'Vann', 'vann']] },
+  { tittel: 'Gassinjeksjon', enhet: 'SM3/DAY', serier: [['GIR', 'Gass', 'gass']] },
+  { tittel: 'Trykk', enhet: 'BARSA', serier: [['BHP', 'Bunnhullstrykk', 'trykk'], ['PR', 'Reservoartrykk', 'trykk']] },
+  { tittel: 'Vannkutt', enhet: '', serier: [['WCT', 'Vannkutt', 'vann']] }
+];
+function kurver(navn) {
+  if (!smry) return null;
+  const felt = !navn, pre = felt ? 'F' : 'W';
+  const finn = k => smry.vektorer.findIndex(v => v.nokkel === k && (felt || v.navn === navn));
+  const figurer = [];
+  for (const K of KURVER) {
+    const serier = [];
+    let enhet = '';
+    for (const [k, etikett, farge] of K.serier) for (const h of ['', 'H']) {
+      const nr = finn(pre + k + h);
+      if (nr < 0) continue;
+      const [f, e] = GRID.enhetSI(smry.vektorer[nr].enhet), v = smry.serie(nr);
+      let noe = false;
+      for (let i = 0; i < v.length; i++) { v[i] *= f; if (v[i] !== 0) noe = true; }
+      if (!noe) continue;   // brønnen har aldri hatt denne strømmen
+      enhet = smry.vektorer[nr].enhet ? e : K.enhet;   // eldre filer mangler UNITS; da antas METRIC
+      serier.push({ nokkel: pre + k + h, etikett: etikett + (h ? ' (historisk)' : ''), farge, hist: !!h, verdier: v });
+    }
+    if (serier.length) figurer.push({ tittel: K.tittel, enhet, serier });
+  }
+  return { navn: navn || '', tider: smry.tider, figurer };
+}
+function kurveNavn() {
+  if (!smry) return null;
+  const s = new Set();
+  for (const v of smry.vektorer) if (v.nokkel[0] === 'W' && v.navn) s.add(v.navn);
+  return { bronner: Array.from(s).sort(), felt: smry.vektorer.some(v => v.nokkel[0] === 'F'), t0: smry.tider[0], t1: smry.tider[smry.tider.length - 1] };
 }
 
 function sendGrid(t0, navn, kw, baner, advarsler) {
@@ -96,8 +154,8 @@ function sendGrid(t0, navn, kw, baner, advarsler) {
   const props = navnene.map(p => ({ navn: p, dynamisk: false }))
     .concat(dyn ? dyn.navn.filter(p => !g.props[p]).map(p => ({ navn: p, dynamisk: true })) : [], [{ navn: 'DEPTH', dynamisk: false }]);
   postMessage({
-    type: 'grid', navn, nx: g.nx, ny: g.ny, nz: g.nz, antAktive: g.antAktive, bbox: g.bbox, origo: g.origo,
-    props, forkast, bronner, tider, advarsler, tid: performance.now() - t0
+    type: 'grid', navn, nx: g.nx, ny: g.ny, nz: g.nz, antAktive: g.antAktive, bbox: g.bbox, origo: g.origo, enhet: g.enhet,
+    props, forkast, bronner, tider, advarsler, kurver: kurveNavn(), tid: performance.now() - t0
   });
 }
 
@@ -135,6 +193,13 @@ function lesFiler(filer) {
     if (!kw.ACTNUM) delete kw.ACTNUM;
     if (post('MAPAXES')) kw.MAPAXES = Float64Array.from(ECLBIN.les(eg.kilde, post('MAPAXES')));
     delete kw.DIMENS;
+    const gu = post('GRIDUNIT') && String(ECLBIN.les(eg.kilde, post('GRIDUNIT'), 1)[0]).toUpperCase();
+    kw._gridLengde = gu && gu.startsWith('FEET') ? 0.3048 : gu && gu.startsWith('CM') ? 0.01 : 1;
+  }
+  // Resultatfilene oppgir enhetssystemet i INTEHEAD[2]: 1 = METRIC, 2 = FIELD, 3 = LAB.
+  for (const b of binar) {
+    const ih = (b.type === 'init' || b.type === 'restart') && b.idx.find(p => p.navn === 'INTEHEAD' && p.ant > 2);
+    if (ih) { kw._enhet = [, 'METRIC', 'FIELD', 'LAB'][ECLBIN.les(b.kilde, ih, 3)[2]] || kw._enhet; break; }
   }
   const d = kw.SPECGRID || kw.DIMENS;
   const n = d ? (d[0] | 0) * (d[1] | 0) * (d[2] | 0) : 0;
@@ -164,6 +229,12 @@ function lesFiler(filer) {
     if (steg.length && navn.length) dyn = { kilde: rs.kilde, steg, navn, aktiv: Int32Array.from(aktiv) };
     else advarsler.push(rs.f.name + ': antall aktive celler stemmer ikke med gridet. Slipp EGRID-fila fra samme kjøring sammen med UNRST.');
   }
+  smry = null;
+  const sp = binar.find(x => x.type === 'smspec'), su = binar.find(x => x.type === 'unsmry');
+  if (sp && su) {
+    smry = ECLBIN.sammendrag(sp.kilde, sp.idx, su.kilde, su.idx);
+    if (!smry.tider.length) { smry = null; advarsler.push(su.f.name + ': passer ikke med ' + sp.f.name + ' (ulikt antall vektorer).'); }
+  } else if (sp || su) advarsler.push((sp || su).f.name + ': produksjonskurver krever både SMSPEC og UNSMRY fra samme kjøring.');
   for (const b of binar.filter(x => x.type === 'ukjent')) advarsler.push(b.f.name + ': ukjent binærfil, hoppet over.');
   return { kw, baner, advarsler };
 }
@@ -173,7 +244,7 @@ onmessage = function (e) {
   try {
     const t0 = performance.now();
     if (m.type === 'filer' || m.type === 'demo') {
-      hurtig.clear(); statistikker.clear(); sisteHud = null; dyn = null;
+      hurtig.clear(); statistikker.clear(); sisteHud = null; dyn = null; smry = null;
       let kw, baner = [], advarsler = [], navn = 'Eksempelmodell (syntetisk)';
       if (m.type === 'filer') {
         ({ kw, baner, advarsler } = lesFiler(m.filer));
@@ -183,12 +254,17 @@ onmessage = function (e) {
       sendGrid(t0, navn, kw, baner, advarsler);
     } else if (!g) {
       return;
+    } else if (m.type === 'kurver') {
+      const k = kurver(m.navn);
+      if (k) postMessage(Object.assign({ type: 'kurver' }, k));
     } else if (m.type === 'hud') {
-      const f = m.filter, a = hentProp(m.prop, m.steg);
-      const h = GRID.hud(g, Object.assign({}, f, { prop: f.filtrer ? a : null, kartProp: a }));
+      const f = m.filter, a = hentVist(m.prop, m.steg, m.ref);
+      // Hvert filter gjelder en navngitt egenskap, eller det som vises når navnet er tomt.
+      const filtre = (f.filtre || []).map(x => ({ a: x.prop ? hentProp(x.prop, m.steg) : a, pmin: x.pmin, pmax: x.pmax }));
+      const h = GRID.hud(g, Object.assign({}, f, { filtre, kartProp: a }));
       const attr = GRID.flateAttributter(h.antFlater);
       const sw = metning(m.steg);
-      const vol = GRID.volum(g, h.syn, { poro: g.props.PORO, ntg: g.props.NTG, porv: g.props.PORV, sw: sw && sw.a });
+      const vol = GRID.volum(g, h.syn, { poro: g.props.PORO, ntg: g.props.NTG, porv: g.props.PORV, sw: sw && sw.a, sg: sw && hentProp('SGAS', m.steg) });
       vol.swNavn = sw ? sw.navn : null;
       sisteHud = { celle: h.celle.slice(), verdiFlate: h.verdiFlate || null };
       const verdi = verdierPerHjorne(h.celle, a, h.verdiFlate);
@@ -198,14 +274,15 @@ onmessage = function (e) {
       }, [h.pos.buffer, h.celle.buffer, attr.idx.buffer, attr.hj.buffer, verdi.buffer]);
     } else if (m.type === 'verdi') {
       if (!sisteHud) return;
-      const verdi = verdierPerHjorne(sisteHud.celle, hentProp(m.prop, m.steg), null);
+      const verdi = verdierPerHjorne(sisteHud.celle, hentVist(m.prop, m.steg, m.ref), null);
       postMessage({ type: 'verdi', id: m.id, verdi }, [verdi.buffer]);
     } else if (m.type === 'stat') {
-      postMessage({ type: 'stat', id: m.id, prop: m.prop, stat: stat(m.prop, m.steg) });
+      postMessage({ type: 'stat', id: m.id, prop: m.prop, stat: stat(m.prop, m.steg, m.ref) });
     } else if (m.type === 'celle') {
       const verdier = [];
       for (const p of Object.keys(g.props)) verdier.push([p, g.props[p][m.c]]);
       if (dyn) for (const p of dyn.navn) if (!g.props[p]) verdier.push([p, hentProp(p, m.steg)[m.c]]);
+      if (m.ref != null && erDynamisk(m.prop)) verdier.unshift(['Endring i ' + m.prop, hentVist(m.prop, m.steg, m.ref)[m.c]]);
       postMessage({ type: 'celle', id: m.id, c: m.c, verdier });
     }
   } catch (err) {

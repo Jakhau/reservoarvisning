@@ -161,6 +161,9 @@
           const t = tekst(s, p).toUpperCase();
           if (t === 'INCLUDE') modus = 2;
           else if (t === 'ENDBOX') { boks = null; modus = 0; }
+          // Enhetssystemet står i RUNSPEC, altså før GRID. Senere er «FIELD» et gruppenavn.
+          else if ((t === 'FIELD' || t === 'METRIC' || t === 'LAB') && !ut._etterRunspec) { ut._enhet = t; modus = 0; }
+          else if (t === 'GRID' || t === 'SCHEDULE') { ut._etterRunspec = true; modus = 0; }
           else if (POSTLISTE.has(t)) { modus = 3; iPost = 0; }
           else if (FANG.has(t)) {
             modus = 4; post = [];

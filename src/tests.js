@@ -318,6 +318,10 @@ test('volum: bulk, porevolum og HCPV for utvalget', () => {
   const v = GRID.volum(g, syn, { poro: g.props.PORO, ntg: g.props.NTG, sw: g.props.SWAT });
   lik(v.bulk, 2 * V, 1); lik(v.pv, 0.2 * V + 0.15 * V, 1); lik(v.hcpv, 0.2 * V * 0.75, 1);
   lik(GRID.volum(g, syn, {}).pv, null);
+  lik(v.olje, null);
+  // Med gassmetning: olje + gass = HCPV, og gass = PV·Sg (aldri mer enn 1 − Sw, så cellen med Sw = 1 gir null).
+  const d = GRID.volum(g, syn, { poro: g.props.PORO, ntg: g.props.NTG, sw: g.props.SWAT, sg: new Float32Array(g.n).fill(0.1) });
+  lik(d.gass, 0.2 * V * 0.1, 1e-2, 'gass'); lik(d.olje + d.gass, d.hcpv, d.pv * 1e-5, 'olje + gass');
   const porv = GRID.volum(g, GRID.synlige(g, { i0: 1, i1: 1 }).syn, { porv: new Float32Array([7, 9]) });
   lik(porv.bulk, V, 1); lik(porv.pv, 9, 1e-6, 'PORV brukes direkte');
 });
@@ -417,6 +421,57 @@ test('eclbin: SPE1 fra OPM leses riktig (hoppes over uten testdata)', () => {
   // SPE1 (Odeh 1981): starttrykk 4800 psia i 8400 fot; trykket i øverste lag ligger like under.
   const p0 = ECLBIN.les(r, steg[0].poster.PRESSURE);
   lik(p0.length, 300); if (!(p0[0] > 4700 && p0[0] < 4800)) throw new Error('starttrykk ' + p0[0]);
+});
+
+test('enheter: FIELD regnes om til meter og bar, METRIC står urørt', () => {
+  const deck = e => ['RUNSPEC', 'DIMENS', ' 2 1 1 /', e, 'GRID', 'DX', ' 2*100 /', 'DY', ' 2*100 /', 'DZ', ' 2*10 /',
+    'TOPS', ' 2*1000 /', 'PRESSURE', ' 2*1000 /', 'PORO', ' 2*0.2 /', 'SCHEDULE', 'GCONPROD', 'FIELD ORAT 100 /', '/', ''].join('\n');
+  const f = GRID.lagGrid(GRDECL.parseTekst(deck('FIELD')));
+  if (f.enhet !== 'FIELD') throw new Error('enhet ' + f.enhet);
+  lik(f.bbox.x1, 60.96, 1e-3, '200 fot'); lik(f.bbox.z0, 304.8, 1e-3, '1000 fot');
+  lik(f.props.DX[0], 30.48, 1e-3); lik(f.props.PRESSURE[0], 68.9476, 1e-3, '1000 psi'); lik(f.props.PORO[0], 0.2, 1e-6);
+  // 200 × 100 × 10 fot = 200 000 ft³ = 5663,37 m³
+  lik(GRID.volum(f, new Uint8Array(f.n).fill(1), {}).bulk, 5663.37, 0.5, 'bulkvolum i m³');
+  const m = GRID.lagGrid(GRDECL.parseTekst(deck('METRIC')));
+  if (m.enhet !== 'METRIC') throw new Error('enhet ' + m.enhet); lik(m.bbox.x1, 200); lik(m.props.PRESSURE[0], 1000);
+  // «FIELD» som gruppenavn i SCHEDULE skal ikke bytte enhetssystem.
+  if (GRID.lagGrid(GRDECL.parseTekst(deck(''))).enhet !== 'METRIC') throw new Error('gruppenavnet FIELD byttet enhet');
+  lik(GRID.enhetFaktor('RS', 'FIELD'), 178.1076, 1e-3);
+});
+
+test('sammendrag: SPE1 fra OPM gir riktige rater og datoer (hoppes over uten testdata)', () => {
+  const fs = require('fs'), ECLBIN = require('./eclbin.js'), d = '../data/spe1/SPE1CASE1.';
+  if (!fs.existsSync(d + 'SMSPEC')) { console.log('      (ingen testdata i data/spe1)'); return; }
+  const sp = ECLBIN.bufferKilde(fs.readFileSync(d + 'SMSPEC')), su = ECLBIN.bufferKilde(fs.readFileSync(d + 'UNSMRY'));
+  const si = ECLBIN.indeks(sp), ui = ECLBIN.indeks(su);
+  if (ECLBIN.filtype(si) !== 'smspec' || ECLBIN.filtype(ui) !== 'unsmry') throw new Error('filtype ' + ECLBIN.filtype(si) + '/' + ECLBIN.filtype(ui));
+  const s = ECLBIN.sammendrag(sp, si, su, ui);
+  lik(s.start, Date.UTC(2015, 0, 1)); lik(s.vektorer.length, 42);
+  lik(s.tider[0], Date.UTC(2015, 0, 2), 1, 'første ministeg er etter ett døgn');
+  for (let i = 1; i < s.tider.length; i++) if (!(s.tider[i] > s.tider[i - 1])) throw new Error('tidene stiger ikke');
+  // SPE1 (Odeh 1981): produsenten går på 20 000 STB/D olje og injektoren på 100 MMscf/D gass.
+  const nr = (k, w) => s.vektorer.findIndex(v => v.nokkel === k && (!w || v.navn === w));
+  const opr = s.serie(nr('WOPR', 'PROD')), gir = s.serie(nr('WGIR', 'INJ'));
+  lik(Math.max(...opr), 20000, 1); lik(Math.max(...gir), 100000, 1);
+  if (nr('WOPR', 'INJ') >= 0 && Math.max(...s.serie(nr('WOPR', 'INJ'))) > 0) throw new Error('injektoren produserer olje');
+  const [f, e] = GRID.enhetSI(s.vektorer[nr('WOPR', 'PROD')].enhet);
+  lik(20000 * f, 3179.75, 0.01, '20 000 stb/d i Sm³/d'); if (e !== 'SM3/DAY') throw new Error('enhet ' + e);
+  lik(GRID.enhetSI('MSCF/DAY')[0] * 100000, 2831685, 1, '100 MMscf/d i Sm³/d');
+  lik(GRID.enhetSI('SM3/DAY')[0], 1); lik(GRID.enhetSI('')[0], 1);
+});
+
+test('filtre: flere egenskapsfiltre må alle være oppfylt, og NaN faller utenfor', () => {
+  const g = GRID.lagGrid(GRDECL.parseTekst(boksTekst(4, 1, 1, 'PORO\n0.1 0.2 0.3 0.4 /\nPERMX\n10 500 20 900 /\n')));
+  const ant = filtre => GRID.synlige(g, { filtre }).antCeller;
+  lik(ant([]), 4);
+  lik(ant([{ a: g.props.PORO, pmin: 0.15, pmax: null }]), 3);
+  lik(ant([{ a: g.props.PORO, pmin: 0.15, pmax: null }, { a: g.props.PERMX, pmin: 100, pmax: null }]), 2, 0, 'PORO ≥ 0,15 og PERMX ≥ 100');
+  lik(ant([{ a: g.props.PORO, pmin: 0.15, pmax: 0.35 }, { a: g.props.PERMX, pmin: 100, pmax: null }]), 1);
+  // Den eldre formen med ett filter virker fortsatt, også sammen med de nye.
+  lik(GRID.synlige(g, { prop: g.props.PERMX, pmax: 100, filtre: [{ a: g.props.PORO, pmin: 0.25, pmax: null }] }).antCeller, 1);
+  const hull = Float32Array.from([1, NaN, 1, 1]);
+  lik(ant([{ a: hull, pmin: null, pmax: 5 }]), 3, 0, 'NaN');
+  lik(GRID.hud(g, { filtre: [{ a: g.props.PERMX, pmin: 100, pmax: null }] }).antCeller, 2, 0, 'hud bruker samme filtre');
 });
 
 console.log(ok + ' av ' + (ok + feil) + ' tester besto');

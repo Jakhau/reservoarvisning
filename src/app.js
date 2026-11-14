@@ -10,6 +10,8 @@
 
   const FARGEKART = {
     viridis: ['#440154', '#472d7b', '#3b528b', '#2c728e', '#21918c', '#28ae80', '#5ec962', '#addc30', '#fde725'],
+    // Divergerende: to farger rundt et nøytralt grått midtpunkt (null endring).
+    endring: ['#2166ac', '#67a9cf', '#c3d9e8', '#dcdcdc', '#f0c9b4', '#ef8a62', '#b2182b'],
     spektral: ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#ffffbf', '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026']
   };
   // Klassefarger for heltallsegenskaper (regioner, tabellnumre).
@@ -133,7 +135,7 @@
     rammeMat.color.set(css('--ramme'));
     linjeMat.color.set(css('--markor'));
     if (markor) markor.material.color.set(css('--markor'));
-    if (grid) { byggBronner(); if (stat) tegnHisto(); }
+    if (grid) { byggBronner(); if (stat) tegnHisto(); KURVEPANEL.tegn(); }
     tegn = true;
   }
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', tema);
@@ -171,12 +173,14 @@
     else if (m.type === 'hud') nyHud(m);
     else if (m.type === 'stat') nyStat(m);
     else if (m.type === 'celle') visCelle(m);
+    else if (m.type === 'kurver') nyeKurver(m);
   };
 
   // ---------- lasting ----------
   function lastFiler(filer) {
     filer = Array.from(filer);
     if (!filer.length) return;
+    sisteFiler = filer;
     $('feil').style.display = 'none';
     $('opptatt').style.display = 'block';
     worker.postMessage({ type: 'filer', filer });   // File-objektene leses i bakgrunnstråden
@@ -194,6 +198,8 @@
     $('kompass').style.display = 'block';
     $('celle').style.display = 'none';
     $('modellnavn').textContent = m.navn; $('modellnavn').title = m.navn;
+    ventSkala = ventKamera = null; visVisninger();
+    fyllKurveValg();
     $('advarsel').textContent = m.advarsler.join(' ');
     $('advarsel').style.display = m.advarsler.length ? 'block' : 'none';
     storrelse();
@@ -209,7 +215,8 @@
       for (const s of [a + '0', a + '1']) { $(s).min = 1; $(s).max = n; $(s).step = 1; }
       $(a + '0').value = 1; $(a + '1').value = n;
     }
-    $('fmin').value = ''; $('fmax').value = '';
+    $('filtre').innerHTML = ''; nyFilterRad();
+    $('endring').checked = false; fyllRefSteg(); oppdaterEndring();
     $('modus').value = 'celler'; $('snittvalg').style.display = 'none';
     $('visGrid').checked = $('visForkast').checked = $('visBronner').checked = $('visRamme').checked = true;
     $('sprang').checked = false; $('forkastModus').value = 'hel';
@@ -270,8 +277,7 @@
   function filter() {
     const v = id => +$(id).value - 1;
     const f = { i0: v('i0'), i1: v('i1'), j0: v('j0'), j1: v('j1'), k0: v('k0'), k1: v('k1'), modus: 'celler', filtrer: false };
-    const lo = $('fmin').value, hi = $('fmax').value;
-    if (lo !== '' || hi !== '') { f.filtrer = true; f.pmin = lo === '' ? null : +lo; f.pmax = hi === '' ? null : +hi; }
+    f.filtre = filterRader();
     const m = $('modus').value;
     if (m === 'snitt' && linje) { f.modus = 'snitt'; f.linje = linje; }
     else if (m.startsWith('kart')) { f.modus = 'kart'; f.kart = m.split(':')[1]; }
@@ -283,7 +289,7 @@
     if (!grid) return;
     if (venter) { ko = true; return; }
     venter = true; ko = false;
-    worker.postMessage({ type: 'hud', id: ++hudId, filter: filter(), prop, steg });
+    worker.postMessage({ type: 'hud', id: ++hudId, filter: filter(), prop, steg, ref: refSteg() });
   }
 
   function nyHud(m) {
@@ -298,7 +304,8 @@
     else { mesh = new THREE.Mesh(geo, materiale); mesh.frustumCulled = false; gruppe.add(mesh); }
     fjernMarkor();
     $('status').textContent = grid.nx + ' × ' + grid.ny + ' × ' + grid.nz + ' · ' +
-      hel(m.antCeller) + ' av ' + hel(grid.antAktive) + ' celler · ' + hel(m.antFlater) + ' flater · ' + Math.round(m.tid) + ' ms';
+      hel(m.antCeller) + ' av ' + hel(grid.antAktive) + ' celler · ' + hel(m.antFlater) + ' flater · ' + Math.round(m.tid) + ' ms' +
+      (grid.enhet && grid.enhet !== 'METRIC' ? ' · omregnet fra ' + grid.enhet + ' til SI' : '');
     visVolum(m.volum);
     if (m.omrade) {
       // Kartverdier har et annet verdiområde enn egenskapen selv; sett skalaen når kartet skifter.
@@ -307,6 +314,12 @@
       fargeskala();
     }
     if (forste && m.antFlater) { forste = false; if (!ramme) byggRamme(); tilpass(false); }
+    // En lagret visning eller lenke settes først når flatene den gjelder, er på plass.
+    if (!ko) {
+      if (ventSkala) { brukSkala(ventSkala); ventSkala = null; }
+      if (ventKamera) { settKamera(ventKamera); ventKamera = null; }
+      if (ventLenke) { const t = ventLenke; ventLenke = null; brukTilstand(t); }
+    }
     tegn = true;
     if (ko) bestillHud();
   }
@@ -316,14 +329,15 @@
     $('volum').innerHTML =
       '<tr><td>Bulkvolum</td><td>' + mm(v.bulk) + '</td></tr>' +
       '<tr><td>Porevolum</td><td>' + mm(v.pv) + '</td></tr>' +
-      '<tr><td>HCPV' + (v.swNavn ? ' (Sw fra ' + v.swNavn + ')' : '') + '</td><td>' + mm(v.hcpv) + '</td></tr>';
+      '<tr><td>HCPV' + (v.swNavn ? ' (Sw fra ' + v.swNavn + ')' : '') + '</td><td>' + mm(v.hcpv) + '</td></tr>' +
+      (v.olje == null ? '' : '<tr><td>– olje</td><td>' + mm(v.olje) + '</td></tr><tr><td>– gass</td><td>' + mm(v.gass) + '</td></tr>');
   }
 
   // ---------- egenskap, fargeskala og histogram ----------
   function velgEgenskap(ny) {
     prop = $('egenskap').value;
     nullstill = nullstill || ny;
-    worker.postMessage({ type: 'stat', prop, steg });
+    worker.postMessage({ type: 'stat', prop, steg, ref: refSteg() });
   }
 
   function nyStat(m) {
@@ -334,6 +348,7 @@
       $('logg').checked = /^(PERM|TRAN)/.test(prop) && stat.minPos != null && stat.max / stat.minPos > 50;
       nullstillSkala();
     }
+    if (ventSkala) brukSkala(ventSkala, true);
     lagLut();
     fargeskala();
   }
@@ -346,6 +361,11 @@
   }
   function nullstillSkala() {
     if (!stat) return;
+    if (stat.endring) {   // symmetrisk rundt null, så grått betyr «ingen endring»
+      const m = rund(Math.max(Math.abs(stat.min), Math.abs(stat.max)) || 1e-6, true);
+      $('cmin').value = -m; $('cmax').value = m;
+      return;
+    }
     $('cmin').value = rund($('logg').checked ? stat.minPos : stat.min, false);
     $('cmax').value = rund(stat.max, true);
   }
@@ -454,13 +474,182 @@
     steg = Math.max(0, Math.min(grid.tider.length - 1, s));
     $('tid').value = steg;
     oppdaterTidTekst();
+    kurveTid();
     byggBronner();
     // Egenskaper og metning kan endre seg med tiden; da må både farger og volum hentes på nytt.
     if (grid.props.some(p => p.dynamisk)) {
       bestillHud();
-      if (erDynamisk()) worker.postMessage({ type: 'stat', prop, steg });
+      if (erDynamisk()) worker.postMessage({ type: 'stat', prop, steg, ref: refSteg() });
     }
   }
+  // ---------- egenskapsfiltre ----------
+  // Hver rad: egenskap (tomt valg = det som vises), fra og til. Alle rader må være oppfylt.
+  function nyFilterRad() {
+    const rad = document.createElement('div'); rad.className = 'filter';
+    const s = document.createElement('select'); s.setAttribute('aria-label', 'Egenskap i filteret');
+    s.add(new Option('Vist egenskap', ''));
+    for (const p of grid.props) s.add(new Option(p.navn, p.navn));
+    const felt = hjelp => { const i = document.createElement('input'); i.type = 'number'; i.step = 'any'; i.placeholder = hjelp; i.setAttribute('aria-label', hjelp); return i; };
+    const lo = felt('fra'), hi = felt('til');
+    const x = document.createElement('button'); x.textContent = '×'; x.title = 'Fjern filteret'; x.setAttribute('aria-label', 'Fjern filteret');
+    x.addEventListener('click', () => { rad.remove(); if (!$('filtre').children.length) nyFilterRad(); bestillHud(); });
+    for (const el of [s, lo, hi]) el.addEventListener('input', bestillHud);
+    rad.append(s, lo, hi, x);
+    $('filtre').appendChild(rad);
+  }
+  function filterRader() {
+    const ut = [];
+    for (const rad of $('filtre').children) {
+      const [s, lo, hi] = rad.children;
+      if (lo.value === '' && hi.value === '') continue;
+      ut.push({ prop: s.value, pmin: lo.value === '' ? null : +lo.value, pmax: hi.value === '' ? null : +hi.value });
+    }
+    return ut;
+  }
+  // Grenser som gjaldt forrige viste egenskap, gir ikke mening for den neste.
+  function tomVistFilter() {
+    for (const rad of $('filtre').children) if (rad.children[0].value === '') { rad.children[1].value = ''; rad.children[2].value = ''; }
+  }
+
+  // ---------- endring mellom to tidssteg ----------
+  const refSteg = () => $('endring').checked && erDynamisk() ? +$('refSteg').value : null;
+  function fyllRefSteg() {
+    const s = $('refSteg');
+    s.innerHTML = '';
+    grid.tider.forEach((t, i) => s.add(new Option(dato(t), i)));
+  }
+  let kartFor = null;   // fargekartet som var valgt før endringsvisningen
+  function oppdaterEndring() {
+    const kan = erDynamisk() && grid.tider.length > 1;
+    $('radEndring').style.display = kan ? '' : 'none';
+    if (!kan) $('endring').checked = false;
+    const pa = $('endring').checked;
+    $('refSteg').style.display = pa ? '' : 'none';
+    if (pa && kartFor == null) { kartFor = $('fargekart').value; $('fargekart').value = 'endring'; }
+    if (!pa && kartFor != null) { $('fargekart').value = kartFor; kartFor = null; }
+  }
+  function endringByttet() {
+    oppdaterEndring();
+    tomVistFilter();
+    kartNokkel = '';
+    velgEgenskap(true);
+    bestillHud();
+  }
+  $('endring').addEventListener('change', endringByttet);
+  $('refSteg').addEventListener('change', endringByttet);
+
+  // ---------- to modeller side om side ----------
+  // Hver halvdel er en egen utgave av appen i en ramme. Kamera (relativt til modellens midtpunkt)
+  // og valg i panelet kopieres til den andre halvdelen når låsene er på.
+  const iRamme = window.parent !== window && !!window.parent.DELT;
+  let sisteFiler = null, synker = false;
+  function kameraTilstand() {
+    return { p: kamera.position.toArray(), t: styring.target.toArray(), zs: $('zs').value };
+  }
+  function settKamera(k) {
+    synker = true;
+    kamera.position.fromArray(k.p); styring.target.fromArray(k.t);
+    if ($('zs').value !== k.zs) { $('zs').value = k.zs; overdrivelse(); }
+    styring.update();
+    synker = false; tegn = true;
+  }
+  function settValg(id, verdi, type) {
+    const el = $(id);
+    if (!el || el.disabled) return;
+    if (el.type === 'checkbox') { if (el.checked === verdi) return; el.checked = verdi; }
+    else {
+      if (el.tagName === 'SELECT' && !Array.from(el.options).some(o => o.value === verdi)) return;
+      if (el.value === verdi) return;
+      el.value = verdi;
+    }
+    el.dispatchEvent(new Event(type, { bubbles: true }));
+  }
+  if (iRamme) {
+    document.body.classList.add('i-ramme');
+    $('sammenlign').style.display = 'none';
+    styring.addEventListener('change', () => { if (!synker && grid) window.parent.DELT.kamera(window, kameraTilstand()); });
+    // Bare det brukeren selv gjør sendes videre (isTrusted), ellers ville halvdelene svart hverandre i ring.
+    for (const type of ['input', 'change']) $('panel').addEventListener(type, e => {
+      const el = e.target;
+      if (!e.isTrusted || !el.id || el.type === 'file') return;
+      window.parent.DELT.valg(window, el.id, el.type === 'checkbox' ? el.checked : el.value, type);
+      if (el.id === 'zs') window.parent.DELT.kamera(window, kameraTilstand());
+    });
+  } else {
+    const ruter = () => Array.from(document.querySelectorAll('#delt iframe'));
+    const andre = fra => ruter().map(r => r.contentWindow).filter(w => w !== fra && w.APP && w.APP.grid);
+    window.DELT = {
+      kamera(fra, k) { if ($('lasKamera').checked) for (const w of andre(fra)) w.APP.settKamera(k); },
+      valg(fra, id, verdi, type) { if ($('lasValg').checked) for (const w of andre(fra)) w.APP.settValg(id, verdi, type); }
+    };
+    $('sammenlign').addEventListener('click', () => {
+      const boks = $('delt').querySelector('.ruter');
+      boks.innerHTML = '';
+      for (let n = 0; n < 2; n++) {
+        const r = document.createElement('iframe');
+        r.title = n ? 'Modell til høyre' : 'Modell til venstre';
+        r.src = location.pathname;
+        // Venstre halvdel starter med modellen som allerede er åpen.
+        if (n === 0 && sisteFiler) r.addEventListener('load', () => r.contentWindow.APP.lastFiler(sisteFiler));
+        boks.appendChild(r);
+      }
+      stoppSpill();
+      $('delt').style.display = 'grid';
+    });
+    $('avsluttDelt').addEventListener('click', () => {
+      $('delt').style.display = 'none';
+      $('delt').querySelector('.ruter').innerHTML = '';
+    });
+  }
+
+  // ---------- produksjonskurver ----------
+  // Vises når modellen er lastet sammen med SMSPEC/UNSMRY. Tidslinja i 3D og kurvene følger
+  // hverandre: valgt tidssteg markeres i kurvene, og et klikk i en kurve velger nærmeste steg.
+  function kurveTid() { KURVEPANEL.settTid(grid && grid.tider.length ? grid.tider[steg] : null); }
+  function apneKurver(apen) {
+    const har = !!(grid && grid.kurver);
+    $('kurver').style.display = har && apen ? 'block' : 'none';
+    $('visKurver').style.display = har && !apen ? '' : 'none';
+    document.body.classList.toggle('kurver-apen', har && apen);
+    document.documentElement.style.setProperty('--kurve-h', $('kurver').offsetHeight + 'px');
+    if (har && apen) KURVEPANEL.tegn();
+  }
+  function fyllKurveValg() {
+    const k = grid.kurver, v = $('kurveValg');
+    v.innerHTML = '';
+    KURVEPANEL.tom();
+    if (k) {
+      if (k.felt) v.add(new Option('Hele feltet', ''));
+      for (const n of k.bronner) v.add(new Option(n, n));
+      worker.postMessage({ type: 'kurver', navn: v.value });
+    }
+    apneKurver(!!k);
+  }
+  function nyeKurver(m) {
+    KURVEPANEL.vis($('kurveFig'), m, {
+      velgTid: t => {
+        const a = grid.tider;
+        if (!a.length) return;
+        let best = 0;
+        for (let i = 1; i < a.length; i++) if (Math.abs(a[i] - t) < Math.abs(a[best] - t)) best = i;
+        if (best !== steg) { stoppSpill(); settSteg(best); }
+      }
+    });
+    kurveTid();
+    document.documentElement.style.setProperty('--kurve-h', $('kurver').offsetHeight + 'px');
+  }
+  function velgKurve(navn) {
+    const v = $('kurveValg');
+    if (!grid.kurver || !Array.from(v.options).some(o => o.value === navn)) return false;
+    v.value = navn;
+    apneKurver(true);
+    worker.postMessage({ type: 'kurver', navn });
+    return true;
+  }
+  $('kurveValg').addEventListener('change', () => worker.postMessage({ type: 'kurver', navn: $('kurveValg').value }));
+  $('kurveLukk').addEventListener('click', () => apneKurver(false));
+  $('visKurver').addEventListener('click', () => apneKurver(true));
+
   function stoppSpill() { if (spiller) { clearInterval(spiller); spiller = null; $('spill').innerHTML = '&#9654;'; } }
   $('spill').addEventListener('click', () => {
     if (spiller) return stoppSpill();
@@ -545,8 +734,9 @@
       gjennom.renderOrder = 5;
       bronnGruppe.add(ror, gjennom);
       const el = document.createElement('div');
-      el.className = 'etikett ' + klasse;
+      el.className = 'etikett bronn ' + klasse;
       el.textContent = w.navn;
+      el.addEventListener('click', () => velgKurve(w.navn));
       $('etiketter').appendChild(el);
       etiketter.push({ el, pos: pkt[0], skaler: false, bronn: true, bredde: 7 * w.navn.length + 12 });
     });
@@ -632,7 +822,11 @@
     if (!mesh || !hud || !hud.antFlater) return;
     // Tilpass til det som faktisk tegnes (pilarene kan dekke et mye større område enn de aktive cellene).
     const b = boks();
-    const avstand = b.r / Math.sin(kamera.fov * Math.PI / 360) * 0.8;
+    // Den frie flaten ved siden av panelet kan være smalere enn den er høy (delt visning, smalt
+    // vindu); da er det den vannrette synsvinkelen som avgjør avstanden.
+    const fri = Math.max(200, window.innerWidth - ($('panel').offsetWidth + 12)) / window.innerHeight;
+    const halv = Math.min(kamera.fov * Math.PI / 360, Math.atan(Math.tan(kamera.fov * Math.PI / 360) * fri));
+    const avstand = b.r / Math.sin(halv) * 0.8;
     styring.target.copy(b.senter);
     // Se på tvers av modellens lengste horisontale akse, så den fyller skjermbredden.
     let retning = b.dz > b.dx ? new THREE.Vector3(-0.8, 0.5, 0.33) : new THREE.Vector3(-0.33, 0.5, 0.8);
@@ -736,7 +930,7 @@
     const c = hud.celle[f], pkt = treffpunkt(f, e);
     sisteTreff = { c, dybde: grid.origo[2] - pkt.y / zs(), kart: kartModus() ? hud.verdi[4 * f] : null };
     settMarkor(f);
-    worker.postMessage({ type: 'celle', id: ++celleId, c, steg });
+    worker.postMessage({ type: 'celle', id: ++celleId, c, steg, prop, ref: refSteg() });
   });
 
   function visTabell(rader) {
@@ -846,7 +1040,8 @@
 
   // ---------- hendelser ----------
   $('egenskap').addEventListener('change', () => {
-    $('fmin').value = ''; $('fmax').value = '';
+    tomVistFilter();
+    oppdaterEndring();
     kartNokkel = '';
     velgEgenskap(true);
     bestillHud();
@@ -859,8 +1054,7 @@
     fargeskala();
   });
   $('fargekart').addEventListener('change', () => { lagLut(); fargeskala(); });
-  $('fmin').addEventListener('input', bestillHud);
-  $('fmax').addEventListener('input', bestillHud);
+  $('nyttFilter').addEventListener('click', () => nyFilterRad());
   $('zs').addEventListener('input', overdrivelse);
   $('kanter').addEventListener('change', () => { materiale.uniforms.kanter.value = $('kanter').checked ? 1 : 0; tegn = true; });
   $('visGrid').addEventListener('change', () => { if (mesh) mesh.visible = $('visGrid').checked; fjernMarkor(); tegn = true; });
@@ -880,6 +1074,202 @@
   });
   window.addEventListener('keydown', e => { if (e.key === 'Escape' && tegner) $('avbryt').click(); });
 
+  // ---------- visninger: tilstand, lenke og lagring ----------
+  // En visning er alt som skal til for å gjenskape bildet av en modell som allerede er åpen:
+  // kamera, egenskap, tid, endring, utsnitt, filtre, modus, fargeskala og hva som er slått på.
+  // Selve modellen ligger aldri i lenken; den beskrives bare med dimensjonene.
+  let ventSkala = null, ventKamera = null, ventLenke = null;
+  const KRYSS = ['kanter', 'visGrid', 'visRamme', 'visForkast', 'visBronner', 'sprang'];
+  const IJK = ['i0', 'i1', 'j0', 'j1', 'k0', 'k1'];
+  const modellNokkel = () => grid.nx + 'x' + grid.ny + 'x' + grid.nz + ':' + grid.antAktive;
+  function tilstand() {
+    const kryss = {};
+    for (const id of KRYSS) kryss[id] = $(id).checked;
+    return {
+      v: 1, m: modellNokkel(), k: kameraTilstand(), prop, steg, ref: refSteg(),
+      ijk: IJK.map(id => +$(id).value), filtre: filterRader(), modus: $('modus').value,
+      linje: $('modus').value === 'snitt' ? linje : null,
+      kart: kartFor != null ? kartFor : $('fargekart').value, cmin: $('cmin').value, cmax: $('cmax').value, logg: $('logg').checked,
+      kryss, forkastModus: $('forkastModus').value
+    };
+  }
+  function brukSkala(s, behold) {
+    if (!diskret || behold) { $('logg').checked = !!s.logg && !$('logg').disabled; $('cmin').value = s.cmin; $('cmax').value = s.cmax; }
+    if (!behold) fargeskala();
+  }
+  function brukTilstand(t) {
+    if (!grid || !t || t.v !== 1) return false;
+    if (t.m && t.m !== modellNokkel()) {
+      $('advarsel').textContent = 'Visningen ble laget for en modell med andre dimensjoner og er ikke brukt.';
+      $('advarsel').style.display = 'block';
+      return false;
+    }
+    stoppSpill();
+    const har = (id, v) => Array.from($(id).options).some(o => o.value === String(v));
+    if (t.prop && har('egenskap', t.prop)) $('egenskap').value = t.prop;
+    prop = $('egenskap').value;
+    steg = Math.max(0, Math.min(grid.tider.length - 1, t.steg | 0));
+    $('tid').value = steg; oppdaterTidTekst(); kurveTid();
+    // Endring: oppdaterEndring bytter selv til det divergerende fargekartet og husker det forrige.
+    if (kartFor != null) { $('fargekart').value = kartFor; kartFor = null; }
+    if (har('fargekart', t.kart)) $('fargekart').value = t.kart;
+    $('endring').checked = t.ref != null;
+    if (t.ref != null && har('refSteg', t.ref)) $('refSteg').value = t.ref;
+    oppdaterEndring();
+    (t.ijk || []).forEach((v, n) => { $(IJK[n]).value = v; });
+    oppdaterUtsnittTekst();
+    $('filtre').innerHTML = '';
+    for (const f of t.filtre || []) {
+      nyFilterRad();
+      const rad = $('filtre').lastChild.children;
+      if (!f.prop || Array.from(rad[0].options).some(o => o.value === f.prop)) rad[0].value = f.prop || '';
+      rad[1].value = f.pmin == null ? '' : f.pmin; rad[2].value = f.pmax == null ? '' : f.pmax;
+    }
+    if (!$('filtre').children.length) nyFilterRad();
+    for (const id of KRYSS) if (t.kryss && id in t.kryss) settValg(id, t.kryss[id], 'change');
+    if (t.forkastModus) settValg('forkastModus', t.forkastModus, 'change');
+    avbrytTegning();
+    linje = t.modus === 'snitt' && t.linje && t.linje.length > 1 ? t.linje : null;
+    $('modus').value = har('modus', t.modus) && (t.modus !== 'snitt' || linje) ? t.modus : 'celler';
+    $('snittvalg').style.display = $('modus').value === 'snitt' ? 'block' : 'none';
+    tegnSnittLinje();
+    kartNokkel = 'låst';   // kartvisninger skal ikke nullstille skalaen som følger med visningen
+    forste = false;
+    forkastSynlig();
+    ventSkala = { cmin: t.cmin, cmax: t.cmax, logg: t.logg };
+    ventKamera = t.k;
+    velgEgenskap(true);
+    byggBronner();
+    bestillHud();
+    return true;
+  }
+
+  // Lenke: tilstanden som base64url-kodet JSON etter #v=.
+  const kod = t => btoa(unescape(encodeURIComponent(JSON.stringify(t)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  function dekod(s) {
+    try { return JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g, '+').replace(/_/g, '/'))))); } catch (e) { return null; }
+  }
+  function lenkeTilstand() { const m = location.hash.match(/[#&]v=([\w-]+)/); return m ? dekod(m[1]) : null; }
+  ventLenke = lenkeTilstand();
+  if (ventLenke) {
+    const p = document.createElement('p');
+    p.textContent = 'Lenken inneholder en lagret visning. Åpne modellen den gjelder, så settes visningen automatisk.';
+    $('velg').parentNode.insertBefore(p, $('velg'));
+  }
+  window.addEventListener('hashchange', () => { const t = lenkeTilstand(); if (t && grid) brukTilstand(t); });
+  $('kopierLenke').addEventListener('click', () => {
+    const hash = '#v=' + kod(tilstand());
+    history.replaceState(null, '', hash);
+    const ferdig = ok => { $('kopierLenke').textContent = ok ? 'Kopiert' : 'Lenken står i adressefeltet'; setTimeout(() => { $('kopierLenke').textContent = 'Kopier lenke'; }, 1800); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(location.href).then(() => ferdig(true), () => ferdig(false));
+    else ferdig(false);
+  });
+
+  // Lagrede visninger ligger i nettleseren (localStorage), per modell.
+  const LAGER = 'reservoarvisning.visninger';
+  function lager() { try { return JSON.parse(localStorage.getItem(LAGER)) || {}; } catch (e) { return {}; } }
+  function skrivLager(alle) { try { localStorage.setItem(LAGER, JSON.stringify(alle)); } catch (e) { /* privat modus: visningene lever bare i denne økten */ } }
+  let visningene = [];
+  function visVisninger() {
+    visningene = lager()[modellNokkel()] || [];
+    const el = $('visninger');
+    el.innerHTML = '';
+    visningene.forEach((v, n) => {
+      const rad = document.createElement('div'); rad.className = 'visning';
+      const navn = document.createElement('input'); navn.value = v.navn; navn.setAttribute('aria-label', 'Navn på visning ' + (n + 1));
+      navn.addEventListener('change', () => { v.navn = navn.value; lagreVisninger(); });
+      const vis = document.createElement('button'); vis.textContent = 'Vis'; vis.title = 'Gå til visningen' + (n < 9 ? ' (tast ' + (n + 1) + ')' : '');
+      vis.addEventListener('click', () => brukTilstand(v.t));
+      const x = document.createElement('button'); x.textContent = '×'; x.title = 'Slett visningen'; x.setAttribute('aria-label', 'Slett visningen ' + v.navn);
+      x.addEventListener('click', () => { visningene.splice(n, 1); lagreVisninger(); visVisninger(); });
+      rad.append(navn, vis, x);
+      el.appendChild(rad);
+    });
+  }
+  function lagreVisninger() { const alle = lager(); alle[modellNokkel()] = visningene; skrivLager(alle); }
+  function lagreVisning() {
+    const t = tilstand();
+    const navn = (t.ref != null ? 'Endring i ' : '') + prop + (grid.tider.length > 1 ? ' · ' + dato(grid.tider[steg]) : '') +
+      (t.modus !== 'celler' ? ' · ' + $('modus').selectedOptions[0].text : '');
+    visningene.push({ navn, t });
+    lagreVisninger(); visVisninger();
+  }
+  $('lagreVisning').addEventListener('click', lagreVisning);
+
+  // ---------- bildeeksport ----------
+  // 3D-bildet med brønn- og akseetiketter og en fargeskala nede til venstre, som PNG.
+  function lagBilde() {
+    renderer.render(scene, kamera);   // tegnebufferen tømmes etter hvert bilde, så les den med en gang
+    const kilde = renderer.domElement, c = document.createElement('canvas');
+    c.width = kilde.width; c.height = kilde.height;
+    const ctx = c.getContext('2d'), s = kilde.width / window.innerWidth, W = window.innerWidth, H = window.innerHeight;
+    ctx.fillStyle = css('--bg3d'); ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(kilde, 0, 0);
+    ctx.scale(s, s);
+    ctx.textBaseline = 'middle';
+    for (const el of document.querySelectorAll('#etiketter .etikett')) {
+      const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+      if (cs.display === 'none' || !r.width || r.right < 0 || r.left > W || r.bottom < 0 || r.top > H) continue;
+      if (!el.classList.contains('akse')) {
+        ctx.fillStyle = css('--bg3d'); ctx.strokeStyle = cs.color; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.rect(Math.round(r.left) + 0.5, Math.round(r.top) + 0.5, Math.round(r.width) - 1, Math.round(r.height) - 1); ctx.fill(); ctx.stroke();
+      }
+      ctx.fillStyle = cs.color; ctx.font = cs.fontWeight + ' ' + cs.fontSize + ' system-ui, "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(el.textContent, r.left + r.width / 2, r.top + r.height / 2 + 0.5);
+    }
+    // Fargeskala med egenskap, tidspunkt og grenser.
+    const x = 16, bredde = 240, y = H - 74;
+    ctx.fillStyle = css('--bg3d'); ctx.globalAlpha = 0.85; ctx.fillRect(x - 8, y - 12, bredde + 16, 74); ctx.globalAlpha = 1;
+    ctx.textAlign = 'left'; ctx.fillStyle = css('--tekst'); ctx.font = '600 13px system-ui, "Segoe UI", sans-serif';
+    const kart = kartModus() ? ' · ' + $('modus').selectedOptions[0].text : '';
+    ctx.fillText((refSteg() != null ? 'Endring i ' + prop + ' siden ' + dato(grid.tider[refSteg()]) : prop) + kart, x, y);
+    ctx.fillStyle = css('--dempet'); ctx.font = '12px system-ui, "Segoe UI", sans-serif';
+    ctx.fillText((grid.tider.length > 1 ? dato(grid.tider[steg]) + ' · ' : '') + zs() + '× vertikalt', x, y + 17);
+    ctx.drawImage($('legende').querySelector('canvas'), x, y + 28, bredde, 10);
+    ctx.fillText($('legMin').textContent, x, y + 49);
+    ctx.textAlign = 'right'; ctx.fillText($('legMax').textContent, x + bredde, y + 49);
+    return c;
+  }
+  function lagreBilde() {
+    if (!grid || !hud) return;
+    const a = document.createElement('a');
+    a.href = lagBilde().toDataURL('image/png');
+    a.download = 'reservoarvisning-' + prop + (grid.tider.length > 1 ? '-' + new Date(grid.tider[steg]).toISOString().slice(0, 10) : '') + '.png';
+    a.click();
+  }
+  $('lagreBilde').addEventListener('click', lagreBilde);
+
+  // ---------- tastatursnarveier ----------
+  const visHjelp = vis => { $('hjelp').style.display = vis ? 'grid' : 'none'; };
+  $('visHjelp').addEventListener('click', () => visHjelp(true));
+  $('lukkHjelp').addEventListener('click', () => visHjelp(false));
+  $('hjelp').addEventListener('click', e => { if (e.target === $('hjelp')) visHjelp(false); });
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape') return visHjelp(false);
+    // Skriver brukeren i et felt eller styrer en glider, er tastene deres.
+    if (e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+    if (e.key === '?') return visHjelp($('hjelp').style.display !== 'grid');
+    if (!grid || $('delt').style.display === 'grid') return;
+    const kryss = id => { const el = $(id); if (el.offsetParent !== null && !el.disabled) el.click(); };
+    const flereSteg = grid.tider.length > 1, k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (k === ' ' && flereSteg) $('spill').click();
+    else if (k === 'ArrowRight' && flereSteg) { stoppSpill(); settSteg(steg + 1); }
+    else if (k === 'ArrowLeft' && flereSteg) { stoppSpill(); settSteg(steg - 1); }
+    else if (k === 'Home' && flereSteg) { stoppSpill(); settSteg(0); }
+    else if (k === 'End' && flereSteg) { stoppSpill(); settSteg(grid.tider.length - 1); }
+    else if (k === 't') tilpass(false);
+    else if (k === 'o') tilpass(true);
+    else if (k === 'k') kryss('kanter');
+    else if (k === 'b') kryss('visBronner');
+    else if (k === 'f') kryss('visForkast');
+    else if (k === 'e') kryss('endring');
+    else if (k === 'l') lagreVisning();
+    else if (k === 'p') lagreBilde();
+    else if (k >= '1' && k <= '9' && visningene[+k - 1]) brukTilstand(visningene[+k - 1].t);
+    else return;
+    e.preventDefault();
+  });
+
   let dra = 0;
   window.addEventListener('dragenter', e => { e.preventDefault(); dra++; $('slipp').style.display = 'grid'; });
   window.addEventListener('dragleave', () => { if (--dra <= 0) { dra = 0; $('slipp').style.display = 'none'; } });
@@ -893,5 +1283,6 @@
 
   // For feilsøking og automatisk testing i nettleseren.
   window.APP = { worker, get grid() { return grid; }, get hud() { return hud; }, get stat() { return stat; }, get steg() { return steg; },
-    get venter() { return venter || ko; }, kamera, tilpass, plukk, settSteg, visSnitt, lastFiler };
+    get venter() { return venter || ko; }, kamera, tilpass, plukk, settSteg, visSnitt, lastFiler, settKamera, settValg, kameraTilstand, tilstand, brukTilstand, lagBilde,
+    kod, dekod, get visninger() { return visningene; } };
 })();

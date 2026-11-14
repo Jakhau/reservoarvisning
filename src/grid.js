@@ -45,6 +45,38 @@
     return { coord, zcorn };
   }
 
+  // Omregning til SI-baserte «METRIC»-enheter (m, bar, m³) fra enhetssystemene FIELD og LAB.
+  // Faktorer: 1 fot = 0,3048 m (eksakt), 1 psi = 0,0689476 bar, 1 rb = 0,1589873 m³,
+  // 1 Mscf/stb = 178,1076 Sm³/Sm³, 1 atm = 1,01325 bar. Kilde: OPM Flow Reference Manual,
+  // kap. 2 (enhetssystemer) og SPE Metric Standard (1982).
+  const LENGDE = { FIELD: 0.3048, LAB: 0.01 };
+  const FAKTOR = {
+    FIELD: [[/^(DX|DY|DZ|TOPS|DEPTH|DZNET)$/, 0.3048], [/^(S?PRESSURE|PBUB|PDEW|PCOW|PCOG|PCW|PCG|SWATINIT_PC)$/, 0.0689476],
+      [/^R?PORV$/, 0.1589873], [/^RS$/, 178.1076], [/^RV$/, 1 / 178.1076], [/^TRAN[XYZ]-?$/, 0.1589873 / 0.0689476]],
+    LAB: [[/^(DX|DY|DZ|TOPS|DEPTH|DZNET)$/, 0.01], [/^(S?PRESSURE|PBUB|PDEW|PCOW|PCOG|PCW|PCG)$/, 1.01325], [/^R?PORV$/, 1e-6]]
+  };
+  function enhetFaktor(navn, enhet) {
+    for (const [re, f] of FAKTOR[enhet] || []) if (re.test(navn)) return f;
+    return 1;
+  }
+
+  // Sammendragsvektorer oppgir enheten som tekst; FIELD-enhetene regnes om til SI-baserte.
+  // 1 stb = 0,1589873 m³, 1 Mscf = 28,31685 m³ (SPE Metric Standard 1982).
+  const SI_ENHET = {
+    'STB/DAY': [0.1589873, 'SM3/DAY'], 'STB': [0.1589873, 'SM3'], 'RB/DAY': [0.1589873, 'RM3/DAY'], 'RB': [0.1589873, 'RM3'],
+    'MSCF/DAY': [28.31685, 'SM3/DAY'], 'MSCF': [28.31685, 'SM3'], 'PSIA': [0.0689476, 'BARSA'], 'PSI': [0.0689476, 'BAR'],
+    'MSCF/STB': [178.1076, 'SM3/SM3'], 'STB/MSCF': [1 / 178.1076, 'SM3/SM3'], 'FT': [0.3048, 'M'],
+    'STB/DAY/PSI': [0.1589873 / 0.0689476, 'SM3/DAY/BAR']
+  };
+  function enhetSI(enhet) { return SI_ENHET[String(enhet || '').toUpperCase()] || [1, enhet || '']; }
+
+  // Skalert kopi. (TypedArray.from med funksjon er flere ganger tregere på store tabeller.)
+  function skalert(a, f, Type) {
+    const ut = new Type(a.length);
+    for (let i = 0; i < a.length; i++) ut[i] = a[i] * f;
+    return ut;
+  }
+
   function lagGrid(kw) {
     const d = kw.SPECGRID || kw.DIMENS;
     if (!d || d.length < 3) throw new Error('Fant verken SPECGRID eller DIMENS. Slipp alle filene modellen består av samtidig.');
@@ -60,6 +92,13 @@
 
     brukOperasjoner(kw, nx, ny, nz);
     coord = kartakser(coord, kw.MAPAXES);
+    // Geometrien regnes om til meter. En EGRID-fil oppgir sin egen lengdeenhet (GRIDUNIT).
+    const enhet = kw._enhet || 'METRIC';
+    const lf = kw._gridLengde || LENGDE[enhet] || 1;
+    if (lf !== 1) {
+      coord = skalert(coord, lf, Float64Array);
+      zcorn = skalert(zcorn, lf, Float32Array);
+    }
 
     const sx = 2 * nx, sxy = 4 * nxy;
     const act = new Uint8Array(n);
@@ -111,7 +150,8 @@
     for (const navn of Object.keys(kw)) {
       const a = kw[navn];
       if (a.length !== n || navn === 'ACTNUM' || navn === 'ZCORN' || navn === 'COORD') continue;
-      props[navn] = a instanceof Float32Array ? a : Float32Array.from(a);
+      const f = enhetFaktor(navn, enhet);
+      props[navn] = f !== 1 ? skalert(a, f, Float32Array) : a instanceof Float32Array ? a : Float32Array.from(a);
     }
     // Dybde til cellesenteret finnes alltid, også når modellen ikke har egenskaper.
     if (!props.DEPTH) {
@@ -125,7 +165,7 @@
     }
 
     return {
-      nx, ny, nz, n, coord, zcorn, act, brudd, props, antAktive,
+      nx, ny, nz, n, coord, zcorn, act, brudd, props, antAktive, enhet,
       bbox: { x0, x1, y0, y1, z0, z1 },
       origo: [(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2]
     };
@@ -157,7 +197,20 @@
   // Finner flatene som faktisk er synlige: flater mot inaktive/filtrerte celler, mot kanten
   // av modellen og langs forkastninger. Innvendige flater tegnes aldri, så en modell med
   // millioner av celler gir bare noen hundre tusen firkanter.
-  // filter: { i0,i1,j0,j1,k0,k1 } (0-basert, inklusive) og valgfritt { prop, pmin, pmax }.
+  // Egenskapsfiltre: filter.filtre = [{ a, pmin, pmax }] der alle må være oppfylt (NaN faller
+  // utenfor). Den eldre formen { prop, pmin, pmax } er ett slikt filter.
+  function filterliste(f) {
+    const inn = f.filtre ? f.filtre.slice() : [];
+    if (f.prop) inn.push({ a: f.prop, pmin: f.pmin, pmax: f.pmax });
+    const ut = inn.filter(x => x && x.a).map(x => ({ a: x.a, lo: x.pmin == null ? -Infinity : x.pmin, hi: x.pmax == null ? Infinity : x.pmax }));
+    return ut.length ? ut : null;
+  }
+  function passerer(filtre, c) {
+    for (let q = 0; q < filtre.length; q++) { const v = filtre[q].a[c]; if (!(v >= filtre[q].lo && v <= filtre[q].hi)) return false; }
+    return true;
+  }
+
+  // filter: { i0,i1,j0,j1,k0,k1 } (0-basert, inklusive) og valgfritt egenskapsfiltre, se filterliste.
   function hud(g, filter) {
     if (filter && filter.modus === 'snitt') return snitt(g, filter);
     if (filter && filter.modus === 'kart') return kart(g, filter);
@@ -168,8 +221,7 @@
     const i0 = kl(f.i0, 0, nx - 1), i1 = kl(f.i1, nx - 1, nx - 1);
     const j0 = kl(f.j0, 0, ny - 1), j1 = kl(f.j1, ny - 1, ny - 1);
     const k0 = kl(f.k0, 0, nz - 1), k1 = kl(f.k1, nz - 1, nz - 1);
-    const prop = f.prop || null;
-    const pmin = f.pmin == null ? -Infinity : f.pmin, pmax = f.pmax == null ? Infinity : f.pmax;
+    const filtre = filterliste(f);
 
     const syn = new Uint8Array(n);
     let antCeller = 0;
@@ -177,7 +229,7 @@
       let c = i0 + nx * j + nxy * k;
       for (let i = i0; i <= i1; i++, c++) {
         if (!act[c]) continue;
-        if (prop) { const v = prop[c]; if (!(v >= pmin && v <= pmax)) continue; }
+        if (filtre && !passerer(filtre, c)) continue;
         syn[c] = 1; antCeller++;
       }
     }
@@ -321,15 +373,14 @@
     f = f || {};
     const kl = (v, std, maks) => Math.max(0, Math.min(maks, v == null ? std : v | 0));
     const r = [kl(f.i0, 0, nx - 1), kl(f.i1, nx - 1, nx - 1), kl(f.j0, 0, ny - 1), kl(f.j1, ny - 1, ny - 1), kl(f.k0, 0, nz - 1), kl(f.k1, nz - 1, nz - 1)];
-    const prop = f.prop || null;
-    const pmin = f.pmin == null ? -Infinity : f.pmin, pmax = f.pmax == null ? Infinity : f.pmax;
+    const filtre = filterliste(f);
     const syn = new Uint8Array(n);
     let antCeller = 0;
     for (let k = r[4]; k <= r[5]; k++) for (let j = r[2]; j <= r[3]; j++) {
       let c = r[0] + nx * j + nxy * k;
       for (let i = r[0]; i <= r[1]; i++, c++) {
         if (!act[c]) continue;
-        if (prop) { const v = prop[c]; if (!(v >= pmin && v <= pmax)) continue; }
+        if (filtre && !passerer(filtre, c)) continue;
         syn[c] = 1; antCeller++;
       }
     }
@@ -367,12 +418,13 @@
   }
 
   // Bulkvolum, porevolum og hydrokarbonporevolum for utvalget. Porevolum = PORV når den finnes
-  // (fra INIT), ellers V·PORO·NTG. HCPV = PV·(1 − Sw).
+  // (fra INIT), ellers V·PORO·NTG. HCPV = PV·(1 − Sw). Med gassmetning deles HCPV i
+  // gass = PV·Sg og olje = PV·(1 − Sw − Sg); alt er volum ved reservoarforhold.
   function volum(g, syn, a) {
     const vol = cellevolum(g);
     a = a || {};
     const harPv = !!(a.porv || a.poro);
-    let bulk = 0, pv = 0, hc = 0;
+    let bulk = 0, pv = 0, hc = 0, gass = 0;
     for (let c = 0; c < g.n; c++) {
       if (!syn[c]) continue;
       bulk += vol[c];
@@ -380,9 +432,15 @@
       const p = a.porv ? a.porv[c] : vol[c] * a.poro[c] * (a.ntg ? a.ntg[c] : 1);
       if (p !== p) continue;
       pv += p;
-      if (a.sw) { const s = a.sw[c]; if (s === s) hc += p * (1 - s); }
+      if (a.sw) {
+        const s = a.sw[c];
+        if (s !== s) continue;
+        hc += p * (1 - s);
+        if (a.sg) { const sg = a.sg[c]; if (sg === sg) gass += p * Math.min(sg, 1 - s); }
+      }
     }
-    return { bulk, pv: harPv ? pv : null, hcpv: harPv && a.sw ? hc : null };
+    const delt = harPv && a.sw && a.sg;
+    return { bulk, pv: harPv ? pv : null, hcpv: harPv && a.sw ? hc : null, gass: delt ? gass : null, olje: delt ? hc - gass : null };
   }
 
   // ---------- tverrsnitt ----------
@@ -830,7 +888,7 @@
   }
 
   const GRID = { lagGrid, hjorner, hud, flateAttributter, statistikk, syntetisk, fraBlokk, forkastninger, bronner, tidspunkter,
-    brukOperasjoner, kartakser, synlige, cellevolum, volum, snitt, kart, baneTekst, baneTil3D, FLATER };
+    brukOperasjoner, kartakser, enhetFaktor, enhetSI, synlige, cellevolum, volum, snitt, kart, baneTekst, baneTil3D, FLATER };
   root.GRID = GRID;
   if (typeof module !== 'undefined' && module.exports) module.exports = GRID;
 })(typeof self !== 'undefined' ? self : globalThis);

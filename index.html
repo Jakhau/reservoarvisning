@@ -10,6 +10,7 @@
     --tekst: #17202a; --dempet: #5d6b7a; --aksent: #0b6bcb; --aksent-tekst: #ffffff;
     --feil: #b3261e; --cellekant: #1b2430; --markor: #ff2d7a;
     --prod: #1a8f3c; --inj: #1668d6; --forkast: #d9480f; --ramme: #8a96a3;
+    --olje: #1a8f3c; --vann: #1668d6; --gass: #c9302c;
     --skygge: 0 6px 24px rgba(20,30,45,.14);
     color-scheme: light dark;
   }
@@ -19,6 +20,7 @@
       --tekst: #e8edf2; --dempet: #98a5b3; --aksent: #5aa9ff; --aksent-tekst: #0b1622;
       --feil: #ff8a80; --cellekant: #05080b; --markor: #ff5c9a;
       --prod: #4fd67a; --inj: #6db3ff; --forkast: #ff7a3d; --ramme: #6b7786;
+      --olje: #2fa558; --vann: #3d87dd; --gass: #dc5148;
       --skygge: 0 6px 24px rgba(0,0,0,.5);
     }
   }
@@ -92,6 +94,38 @@
   .prikk.forkast::before { color: var(--forkast); }
   .prikk::before { content: "\25CF"; margin-right: 4px; }
   .forklaring { color: var(--dempet); font-size: 12px; margin: -2px 0 4px 22px; display: flex; gap: 10px; }
+  .filter { display: grid; grid-template-columns: 1fr 58px 58px 24px; gap: 4px; margin: 4px 0; align-items: center; }
+  .filter select, .filter input { padding: 4px 5px; font-size: 12px; }
+  .filter button { padding: 2px 0; }
+  #delt { position: fixed; inset: 0; display: none; grid-template-rows: auto 1fr; background: var(--bg3d); z-index: 50; }
+  #delt .linje { display: flex; gap: 16px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--kant); background: var(--flate); }
+  #delt .linje strong { margin-right: auto; }
+  #delt .ruter { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--kant); min-height: 0; }
+  #delt iframe { width: 100%; height: 100%; border: 0; display: block; background: var(--bg3d); }
+  .visning { display: grid; grid-template-columns: 1fr auto 24px; gap: 4px; margin: 4px 0; }
+  .visning input { padding: 4px 6px; font-size: 12px; min-width: 0; width: 100%; background: var(--flate2); color: var(--tekst);
+    border: 1px solid var(--kant); border-radius: 6px; font: inherit; }
+  .visning button { padding: 2px 8px; font-size: 12px; }
+  #hjelp { position: fixed; inset: 0; display: none; place-items: center; background: color-mix(in srgb, var(--bg3d) 60%, transparent); z-index: 40; }
+  #hjelp .kort { padding: 18px 22px; min-width: 300px; }
+  #hjelp table { border-collapse: collapse; margin-top: 8px; }
+  #hjelp td { padding: 3px 14px 3px 0; }
+  kbd { font: 600 11px/1 ui-monospace, Consolas, monospace; padding: 3px 6px; border: 1px solid var(--kant); border-radius: 4px; background: var(--flate2); }
+  #kurver { position: fixed; left: 314px; right: 12px; bottom: 12px; padding: 10px 12px 8px; display: none; }
+  #kurver header { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+  #kurver header select { width: auto; max-width: 220px; }
+  #kurveLes { flex: 1; color: var(--dempet); font-variant-numeric: tabular-nums; }
+  #kurveFig { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(230px, 1fr); gap: 14px; overflow-x: auto; scrollbar-width: thin; }
+  .fig h3 { margin: 0 0 2px; font-size: 12px; font-weight: 600; }
+  .fig canvas { display: block; width: 100%; height: 120px; cursor: crosshair; touch-action: none; }
+  .fig .leg { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 11px; color: var(--dempet); min-height: 32px; align-content: flex-start; }
+  .fig .leg i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 4px; }
+  .fig .leg i.hist { border-top-style: dashed; }
+  .fig .leg b { color: var(--tekst); font-weight: 600; font-variant-numeric: tabular-nums; }
+  body.kurver-apen #status { bottom: calc(var(--kurve-h, 0px) + 24px); }
+  body.kurver-apen #kompass { bottom: calc(var(--kurve-h, 0px) + 64px); }
+  body.kurver-apen .etikett.bronn { pointer-events: auto; cursor: pointer; }
+  @media (max-width: 720px) { #kurver { left: 12px; } }
   #opptatt { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); padding: 6px 14px; display: none; }
 </style>
 </head>
@@ -120,6 +154,7 @@
     <select id="fargekart" aria-label="Fargekart">
       <option value="viridis">Viridis</option>
       <option value="spektral">Spektral (blå–rød)</option>
+      <option value="endring">Endring (blå–grå–rød)</option>
     </select>
   </details>
 
@@ -127,6 +162,8 @@
     <summary>Tid</summary>
     <div class="rad"><button id="spill" class="liten" aria-label="Spill av">&#9654;</button>
       <input type="range" id="tid" min="0" max="0" step="1" value="0" aria-label="Tidssteg"><output id="tidUt" style="width:78px"></output></div>
+    <label class="kryss" id="radEndring"><input type="checkbox" id="endring"> Vis endring siden</label>
+    <select id="refSteg" class="innrykk" aria-label="Referansetidspunkt" style="display:none; width:calc(100% - 22px)"></select>
   </details>
 
   <details open>
@@ -153,10 +190,9 @@
     <div class="rad"><span>I</span><div class="dobbel"><input type="range" id="i0" aria-label="I fra"><input type="range" id="i1" aria-label="I til"></div><output id="iUt"></output></div>
     <div class="rad"><span>J</span><div class="dobbel"><input type="range" id="j0" aria-label="J fra"><input type="range" id="j1" aria-label="J til"></div><output id="jUt"></output></div>
     <div class="rad"><span>K</span><div class="dobbel"><input type="range" id="k0" aria-label="K fra"><input type="range" id="k1" aria-label="K til"></div><output id="kUt"></output></div>
-    <div class="to" style="margin-top:6px">
-      <label>Vis egenskap fra<input type="number" id="fmin" step="any" placeholder="ingen"></label>
-      <label>til<input type="number" id="fmax" step="any" placeholder="ingen"></label>
-    </div>
+    <div class="hjelp" style="margin-bottom:2px">Vis bare celler der</div>
+    <div id="filtre"></div>
+    <button id="nyttFilter" class="liten">+ Legg til filter</button>
   </details>
 
   <details open id="dVolum">
@@ -197,10 +233,23 @@
     <div class="liste" id="listeForkast"></div>
   </details>
 
+  <details open id="dVisninger">
+    <summary>Visninger</summary>
+    <div id="visninger"></div>
+    <div class="knapper" style="margin-top:4px">
+      <button id="lagreVisning" class="liten" title="Husk kamera, egenskap, tid, utsnitt og filtre">Lagre visning</button>
+      <button id="kopierLenke" class="liten" title="Lenke som gjenskaper visningen når samme modell åpnes">Kopier lenke</button>
+      <button id="lagreBilde" class="liten" title="Last ned visningen som PNG">Lagre bilde</button>
+    </div>
+  </details>
+
   <div class="knapper" style="margin-top:14px">
     <button id="tilpass">Tilpass visning</button>
     <button id="ovenfra">Ovenfra</button>
+    <button id="visKurver" style="display:none">Kurver</button>
+    <button id="sammenlign" title="Vis to modeller side om side">Sammenlign …</button>
     <button id="apne">Åpne filer …</button>
+    <button id="visHjelp" title="Tastatursnarveier" aria-label="Tastatursnarveier">?</button>
   </div>
 </aside>
 
@@ -209,6 +258,23 @@
   <g id="nal"><path d="M0 -9 L5 6 L0 3 L-5 6 Z" fill="var(--feil)"/><path d="M0 17 L5 6 L0 9 L-5 6 Z" fill="var(--dempet)"/>
   <text y="-11" text-anchor="middle" font-size="9" font-weight="700" fill="var(--tekst)">N</text></g></svg></div>
 <div id="status" class="kort"></div>
+<section id="kurver" class="kort" aria-label="Produksjonskurver">
+  <header>
+    <select id="kurveValg" aria-label="Vis kurver for"></select>
+    <span id="kurveLes"></span>
+    <button id="kurveLukk" class="liten" aria-label="Lukk kurvene">Lukk</button>
+  </header>
+  <div id="kurveFig"></div>
+</section>
+<div id="delt">
+  <div class="linje">
+    <strong>Sammenligning</strong>
+    <label class="kryss"><input type="checkbox" id="lasKamera" checked> Lås kamera</label>
+    <label class="kryss"><input type="checkbox" id="lasValg" checked> Lås egenskap, tid og utsnitt</label>
+    <button id="avsluttDelt" class="liten">Avslutt sammenligning</button>
+  </div>
+  <div class="ruter"></div>
+</div>
 <div id="opptatt" class="kort">Leser modell …</div>
 
 <div id="velkommen">
@@ -223,11 +289,33 @@
     <div id="feil" role="alert"></div>
   </div>
 </div>
+<div id="hjelp" role="dialog" aria-label="Tastatursnarveier">
+  <div class="kort">
+    <h1>Tastatursnarveier</h1>
+    <table>
+      <tr><td><kbd>Mellomrom</kbd></td><td>Spill av / pause tiden</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Forrige / neste tidssteg</td></tr>
+      <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>Første / siste tidssteg</td></tr>
+      <tr><td><kbd>T</kbd></td><td>Tilpass visning</td></tr>
+      <tr><td><kbd>O</kbd></td><td>Se ovenfra</td></tr>
+      <tr><td><kbd>K</kbd></td><td>Cellekanter av/på</td></tr>
+      <tr><td><kbd>B</kbd></td><td>Brønner av/på</td></tr>
+      <tr><td><kbd>F</kbd></td><td>Forkastninger av/på</td></tr>
+      <tr><td><kbd>E</kbd></td><td>Endring siden referansetidspunkt av/på</td></tr>
+      <tr><td><kbd>L</kbd></td><td>Lagre visning</td></tr>
+      <tr><td><kbd>P</kbd></td><td>Lagre bilde (PNG)</td></tr>
+      <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>Gå til lagret visning</td></tr>
+      <tr><td><kbd>?</kbd></td><td>Vis / skjul denne oversikten</td></tr>
+    </table>
+    <div class="knapper"><button id="lukkHjelp">Lukk</button></div>
+  </div>
+</div>
 <div id="slipp">Slipp filene for å åpne modellen</div>
 <input type="file" id="fil" multiple hidden>
 
 <script src="src/vendor/three.min.js"></script>
 <script src="src/vendor/OrbitControls.js"></script>
+<script src="src/kurver.js"></script>
 <script src="src/app.js"></script>
 </body>
 </html>
