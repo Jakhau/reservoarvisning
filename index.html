@@ -9,7 +9,8 @@
     --bg3d: #eef1f4; --flate: #ffffffee; --flate2: #f3f5f7; --kant: #d5dae0;
     --tekst: #17202a; --dempet: #5d6b7a; --aksent: #0b6bcb; --aksent-tekst: #ffffff;
     --feil: #b3261e; --cellekant: #1b2430; --markor: #ff2d7a;
-    --prod: #1a8f3c; --inj: #1668d6; --forkast: #d9480f; --skygge: 0 6px 24px rgba(20,30,45,.14);
+    --prod: #1a8f3c; --inj: #1668d6; --forkast: #d9480f; --ramme: #8a96a3;
+    --skygge: 0 6px 24px rgba(20,30,45,.14);
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
@@ -17,7 +18,8 @@
       --bg3d: #12161b; --flate: #1b2128ee; --flate2: #242b34; --kant: #343d48;
       --tekst: #e8edf2; --dempet: #98a5b3; --aksent: #5aa9ff; --aksent-tekst: #0b1622;
       --feil: #ff8a80; --cellekant: #05080b; --markor: #ff5c9a;
-      --prod: #4fd67a; --inj: #6db3ff; --forkast: #ff7a3d; --skygge: 0 6px 24px rgba(0,0,0,.5);
+      --prod: #4fd67a; --inj: #6db3ff; --forkast: #ff7a3d; --ramme: #6b7786;
+      --skygge: 0 6px 24px rgba(0,0,0,.5);
     }
   }
   * { box-sizing: border-box; }
@@ -26,42 +28,53 @@
   #scene { position: fixed; inset: 0; display: block; width: 100%; height: 100%; }
   .kort { background: var(--flate); border: 1px solid var(--kant); border-radius: 10px;
     box-shadow: var(--skygge); backdrop-filter: blur(8px); }
-  #panel { position: fixed; top: 12px; left: 12px; width: 280px; max-height: calc(100% - 24px);
-    overflow: auto; padding: 14px; display: none; }
+  #panel { position: fixed; top: 12px; left: 12px; width: 290px; max-height: calc(100% - 24px);
+    overflow: auto; padding: 14px; display: none; scrollbar-width: thin; }
   h1 { font-size: 14px; margin: 0 0 2px; font-weight: 650; }
   #modellnavn { color: var(--dempet); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dempet);
-    margin: 16px 0 6px; font-weight: 600; }
+  #advarsel { color: var(--feil); font-size: 12px; margin-top: 6px; display: none; }
+  details { border-top: 1px solid var(--kant); margin-top: 12px; padding-top: 8px; }
+  summary { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dempet);
+    font-weight: 600; cursor: pointer; margin-bottom: 6px; user-select: none; }
   label { display: block; }
   .rad { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
   .rad > span:first-child { width: 14px; font-weight: 600; }
   .rad output { width: 62px; text-align: right; font-variant-numeric: tabular-nums; color: var(--dempet); }
   .dobbel { flex: 1; display: grid; }
-  input[type=range] { width: 100%; margin: 1px 0; accent-color: var(--aksent); }
+  input[type=range] { width: 100%; margin: 1px 0; accent-color: var(--aksent); min-width: 0; }
   select, input[type=number], button { font: inherit; color: var(--tekst); background: var(--flate2);
     border: 1px solid var(--kant); border-radius: 6px; padding: 5px 8px; }
   select { width: 100%; }
   input[type=number] { width: 100%; min-width: 0; }
+  input:disabled, select:disabled { opacity: .5; }
   button { cursor: pointer; }
   button:hover { border-color: var(--aksent); }
   button.primar { background: var(--aksent); color: var(--aksent-tekst); border-color: var(--aksent); font-weight: 600; }
+  button.liten { padding: 2px 8px; font-size: 12px; }
   :focus-visible { outline: 2px solid var(--aksent); outline-offset: 1px; }
   .to { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .kryss { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
-  .knapper { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
-  #legende { margin-top: 8px; }
-  #legende canvas { width: 100%; height: 12px; border-radius: 3px; display: block; border: 1px solid var(--kant); }
+  .kryss { display: flex; gap: 6px; align-items: center; margin: 5px 0; }
+  .innrykk { margin-left: 22px; }
+  .knapper { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .hjelp { color: var(--dempet); font-size: 12px; margin: 6px 0; }
+  #histo { width: 100%; height: 44px; display: block; margin-top: 8px; cursor: ew-resize; touch-action: none; }
+  #legende canvas { width: 100%; height: 10px; border-radius: 3px; display: block; border: 1px solid var(--kant); }
   #legende div { display: flex; justify-content: space-between; color: var(--dempet);
     font-variant-numeric: tabular-nums; font-size: 12px; margin-top: 2px; }
+  .liste { max-height: 170px; overflow: auto; columns: 2; column-gap: 8px; scrollbar-width: thin; }
+  .liste label { display: flex; gap: 5px; align-items: center; break-inside: avoid; font-size: 12px; padding: 1px 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  table.tall { border-collapse: collapse; width: 100%; }
+  table.tall td { padding: 1px 0; font-variant-numeric: tabular-nums; }
+  table.tall td:last-child { text-align: right; padding-left: 16px; }
+  table.tall td:first-child { color: var(--dempet); }
   #status { position: fixed; right: 12px; bottom: 12px; padding: 6px 10px; color: var(--dempet);
     font-variant-numeric: tabular-nums; display: none; }
-  #celle { position: fixed; right: 12px; top: 12px; padding: 12px 14px; min-width: 190px; display: none; }
-  #celle table { border-collapse: collapse; width: 100%; }
-  #celle td { padding: 1px 0; font-variant-numeric: tabular-nums; }
-  #celle td:last-child { text-align: right; padding-left: 16px; }
-  #celle td:first-child { color: var(--dempet); }
+  #kompass { position: fixed; right: 16px; bottom: 52px; width: 46px; height: 46px; display: none; border-radius: 50%; }
+  #kompass svg { width: 100%; height: 100%; display: block; }
+  #celle { position: fixed; right: 12px; top: 12px; padding: 12px 14px; min-width: 190px; max-height: 60%; overflow: auto; display: none; }
   #velkommen { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; }
-  #velkommen .kort { padding: 28px 32px; max-width: 460px; text-align: center; }
+  #velkommen .kort { padding: 28px 32px; max-width: 480px; text-align: center; }
   #velkommen h1 { font-size: 20px; margin-bottom: 8px; }
   #velkommen p { color: var(--dempet); margin: 0 0 18px; }
   #velkommen .knapper { justify-content: center; }
@@ -74,6 +87,8 @@
     white-space: nowrap; background: var(--flate); border: 1px solid currentColor; will-change: transform; }
   .etikett.prod, .prikk.prod { color: var(--prod); }
   .etikett.inj, .prikk.inj { color: var(--inj); }
+  .etikett.ukjent { color: var(--dempet); }
+  .etikett.akse { color: var(--dempet); border: none; background: none; font-weight: 500; font-variant-numeric: tabular-nums; }
   .prikk.forkast::before { color: var(--forkast); }
   .prikk::before { content: "\25CF"; margin-right: 4px; }
   .forklaring { color: var(--dempet); font-size: 12px; margin: -2px 0 4px 22px; display: flex; gap: 10px; }
@@ -87,57 +102,120 @@
 <aside id="panel" class="kort">
   <h1>Reservoarvisning</h1>
   <div id="modellnavn"></div>
+  <div id="advarsel" role="alert"></div>
 
-  <h2>Egenskap</h2>
-  <select id="egenskap" aria-label="Egenskap"></select>
-  <div id="legende"><canvas width="256" height="1"></canvas><div><span id="legMin"></span><span id="legMax"></span></div></div>
-  <div class="to" style="margin-top:8px">
-    <label>Fargeskala min<input type="number" id="cmin" step="any"></label>
-    <label>Fargeskala maks<input type="number" id="cmax" step="any"></label>
-  </div>
-  <div class="rad" style="gap:14px">
-    <label class="kryss"><input type="checkbox" id="logg">Logaritmisk</label>
-    <button id="auto" style="margin-left:auto">Tilbakestill</button>
-  </div>
-  <select id="fargekart" aria-label="Fargekart">
-    <option value="viridis">Viridis</option>
-    <option value="spektral">Spektral (blå–rød)</option>
-  </select>
+  <details open>
+    <summary>Egenskap</summary>
+    <select id="egenskap" aria-label="Egenskap"></select>
+    <canvas id="histo" width="256" height="44" aria-label="Histogram; dra for å flytte grensene i fargeskalaen"></canvas>
+    <div id="legende"><canvas width="256" height="1"></canvas><div><span id="legMin"></span><span id="legMax"></span></div></div>
+    <div class="to" style="margin-top:8px">
+      <label>Fargeskala min<input type="number" id="cmin" step="any"></label>
+      <label>Fargeskala maks<input type="number" id="cmax" step="any"></label>
+    </div>
+    <div class="rad" style="gap:14px">
+      <label class="kryss"><input type="checkbox" id="logg">Logaritmisk</label>
+      <button id="auto" style="margin-left:auto">Tilbakestill</button>
+    </div>
+    <select id="fargekart" aria-label="Fargekart">
+      <option value="viridis">Viridis</option>
+      <option value="spektral">Spektral (blå–rød)</option>
+    </select>
+  </details>
 
-  <h2>Utsnitt (IJK)</h2>
-  <div class="rad"><span>I</span><div class="dobbel"><input type="range" id="i0" aria-label="I fra"><input type="range" id="i1" aria-label="I til"></div><output id="iUt"></output></div>
-  <div class="rad"><span>J</span><div class="dobbel"><input type="range" id="j0" aria-label="J fra"><input type="range" id="j1" aria-label="J til"></div><output id="jUt"></output></div>
-  <div class="rad"><span>K</span><div class="dobbel"><input type="range" id="k0" aria-label="K fra"><input type="range" id="k1" aria-label="K til"></div><output id="kUt"></output></div>
+  <details open id="dTid">
+    <summary>Tid</summary>
+    <div class="rad"><button id="spill" class="liten" aria-label="Spill av">&#9654;</button>
+      <input type="range" id="tid" min="0" max="0" step="1" value="0" aria-label="Tidssteg"><output id="tidUt" style="width:78px"></output></div>
+  </details>
 
-  <h2>Filter på egenskap</h2>
-  <div class="to">
-    <label>Vis fra<input type="number" id="fmin" step="any" placeholder="ingen"></label>
-    <label>Vis til<input type="number" id="fmax" step="any" placeholder="ingen"></label>
-  </div>
+  <details open>
+    <summary>Visningsmodus</summary>
+    <select id="modus" aria-label="Visningsmodus">
+      <option value="celler">3D-celler</option>
+      <option value="snitt">Tverrsnitt</option>
+      <option value="kart:snitt">Kart: gjennomsnitt per kolonne</option>
+      <option value="kart:sum">Kart: sum per kolonne</option>
+      <option value="kart:tykkelse">Kart: tykkelse</option>
+    </select>
+    <div id="snittvalg" style="display:none">
+      <div class="knapper"><button id="tegn">Tegn nytt snitt</button></div>
+      <select id="snittBronn" aria-label="Snitt langs brønn" style="margin-top:6px"></select>
+      <div id="tegnehjelp" style="display:none">
+        <div class="hjelp">Klikk to eller flere punkter på modellen.</div>
+        <div class="knapper"><button id="ferdig" class="primar">Vis snitt</button><button id="avbryt">Avbryt</button></div>
+      </div>
+    </div>
+  </details>
 
-  <h2>Visning</h2>
-  <div class="rad"><span style="width:auto">Vertikal overdrivelse</span><input type="range" id="zs" min="1" max="20" step="0.5" value="5" aria-label="Vertikal overdrivelse"><output id="zsUt" style="width:34px"></output></div>
-  <label class="kryss"><input type="checkbox" id="visGrid" checked>Celler</label>
-  <label class="kryss"><input type="checkbox" id="kanter" checked>Cellekanter</label>
-  <label class="kryss" id="radForkast"><input type="checkbox" id="visForkast" checked><span class="prikk forkast" id="tekstForkast">Forkastninger</span></label>
-  <label class="kryss" id="radBronner"><input type="checkbox" id="visBronner" checked><span id="tekstBronner">Brønner</span></label>
-  <div class="forklaring" id="forklaringBronner"><span class="prikk prod">produsent</span><span class="prikk inj">injektor</span></div>
+  <details open>
+    <summary>Utsnitt (IJK)</summary>
+    <div class="rad"><span>I</span><div class="dobbel"><input type="range" id="i0" aria-label="I fra"><input type="range" id="i1" aria-label="I til"></div><output id="iUt"></output></div>
+    <div class="rad"><span>J</span><div class="dobbel"><input type="range" id="j0" aria-label="J fra"><input type="range" id="j1" aria-label="J til"></div><output id="jUt"></output></div>
+    <div class="rad"><span>K</span><div class="dobbel"><input type="range" id="k0" aria-label="K fra"><input type="range" id="k1" aria-label="K til"></div><output id="kUt"></output></div>
+    <div class="to" style="margin-top:6px">
+      <label>Vis egenskap fra<input type="number" id="fmin" step="any" placeholder="ingen"></label>
+      <label>til<input type="number" id="fmax" step="any" placeholder="ingen"></label>
+    </div>
+  </details>
 
-  <div class="knapper">
+  <details open id="dVolum">
+    <summary>Volum i utsnittet</summary>
+    <table class="tall" id="volum"></table>
+  </details>
+
+  <details open>
+    <summary>Visning</summary>
+    <div class="rad"><span style="width:auto">Vertikal overdrivelse</span><input type="range" id="zs" min="1" max="20" step="0.5" value="5" aria-label="Vertikal overdrivelse"><output id="zsUt" style="width:34px"></output></div>
+    <label class="kryss"><input type="checkbox" id="visGrid" checked>Celler</label>
+    <label class="kryss"><input type="checkbox" id="kanter" checked>Cellekanter</label>
+    <label class="kryss"><input type="checkbox" id="visRamme" checked>Ramme med dybde og lengder</label>
+    <div id="radForkast">
+      <label class="kryss"><input type="checkbox" id="visForkast" checked><span class="prikk forkast" id="tekstForkast">Forkastninger</span></label>
+      <div class="innrykk">
+        <select id="forkastModus" aria-label="Forkastningsflater">
+          <option value="hel">Hele flaten</option>
+          <option value="kontakt">Bare kontakt (sand mot sand)</option>
+        </select>
+        <label class="kryss"><input type="checkbox" id="sprang"><span id="tekstSprang">Farge etter sprang</span></label>
+      </div>
+    </div>
+    <div id="radBronner">
+      <label class="kryss"><input type="checkbox" id="visBronner" checked><span id="tekstBronner">Brønner</span></label>
+      <div class="forklaring"><span class="prikk prod">produsent</span><span class="prikk inj">injektor</span></div>
+    </div>
+  </details>
+
+  <details id="dBronner">
+    <summary id="sumBronner">Velg brønner</summary>
+    <div class="knapper" style="margin:0 0 6px"><button class="liten" data-alle="bronn">Alle</button><button class="liten" data-ingen="bronn">Ingen</button></div>
+    <div class="liste" id="listeBronner"></div>
+  </details>
+  <details id="dForkast">
+    <summary id="sumForkast">Velg forkastninger</summary>
+    <div class="knapper" style="margin:0 0 6px"><button class="liten" data-alle="forkast">Alle</button><button class="liten" data-ingen="forkast">Ingen</button></div>
+    <div class="liste" id="listeForkast"></div>
+  </details>
+
+  <div class="knapper" style="margin-top:14px">
     <button id="tilpass">Tilpass visning</button>
+    <button id="ovenfra">Ovenfra</button>
     <button id="apne">Åpne filer …</button>
   </div>
 </aside>
 
 <div id="celle" class="kort"></div>
+<div id="kompass" class="kort" title="Kompass: nåla peker mot nord"><svg viewBox="-23 -23 46 46" aria-hidden="true">
+  <g id="nal"><path d="M0 -9 L5 6 L0 3 L-5 6 Z" fill="var(--feil)"/><path d="M0 17 L5 6 L0 9 L-5 6 Z" fill="var(--dempet)"/>
+  <text y="-11" text-anchor="middle" font-size="9" font-weight="700" fill="var(--tekst)">N</text></g></svg></div>
 <div id="status" class="kort"></div>
 <div id="opptatt" class="kort">Leser modell …</div>
 
 <div id="velkommen">
   <div class="kort">
     <h1>Reservoarvisning</h1>
-    <p>Slipp GRDECL-filer hvor som helst i vinduet. Består modellen av flere filer
-      (grid, ACTNUM, egenskaper), slipper du alle samtidig.</p>
+    <p>Slipp filene hvor som helst i vinduet, alle samtidig: GRDECL/DATA med INCLUDE-filer,
+      eller EGRID, INIT og UNRST fra en simulering. Brønnbaner kan slippes som tekstfiler (.dev, .csv, .txt).</p>
     <div class="knapper">
       <button class="primar" id="velg">Velg filer …</button>
       <button id="demo">Åpne eksempelmodell</button>
