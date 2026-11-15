@@ -145,8 +145,9 @@
     renderer.setSize(w, h, false);
     kamera.aspect = w / h;
     // Forskyv bildet slik at modellen sentreres i den frie flaten til høyre for panelet.
-    const panel = $('panel').offsetWidth;
-    if (panel && w > 720) kamera.setViewOffset(w, h, -(panel + 12) / 2, 0, w, h);
+    // Det samme gjelder kurvepanelet nederst: bildet løftes så modellen ikke havner bak det.
+    const panel = w > 720 ? $('panel').offsetWidth : 0, kurveH = $('kurver').offsetHeight;
+    if (panel || kurveH) kamera.setViewOffset(w, h, panel ? -(panel + 12) / 2 : 0, kurveH ? (kurveH + 12) / 2 : 0, w, h);
     else kamera.clearViewOffset();
     kamera.updateProjectionMatrix();
     tegn = true;
@@ -174,13 +175,20 @@
     else if (m.type === 'stat') nyStat(m);
     else if (m.type === 'celle') visCelle(m);
     else if (m.type === 'kurver') nyeKurver(m);
+    else if (m.type === 'props') nyeProps(m);
+    else if (m.type === 'eksport') { const f = eksportVent.get(m.id); eksportVent.delete(m.id); if (f) f(m.a); }
+    else if (m.type === 'ekstern') { diffAktiv = m.aktiv; endringByttet(); }
   };
 
   // ---------- lasting ----------
-  function lastFiler(filer) {
+  // kilde: 'norne' eller en liste med nettadresser når modellen er hentet fra nettet, ellers null.
+  let modellKilde = null;
+  function lastFiler(filer, kilde) {
     filer = Array.from(filer);
     if (!filer.length) return;
     sisteFiler = filer;
+    modellKilde = kilde || null;
+    $('opptatt').textContent = 'Leser modell …';
     $('feil').style.display = 'none';
     $('opptatt').style.display = 'block';
     worker.postMessage({ type: 'filer', filer });   // File-objektene leses i bakgrunnstråden
@@ -193,7 +201,7 @@
     avbrytTegning();
     $('opptatt').style.display = 'none';
     $('velkommen').style.display = 'none';
-    $('panel').style.display = 'block';
+    visPanel(!panelSkjult);
     $('status').style.display = 'block';
     $('kompass').style.display = 'block';
     $('celle').style.display = 'none';
@@ -205,8 +213,8 @@
     storrelse();
 
     const sel = $('egenskap');
-    sel.innerHTML = '';
-    for (const p of m.props) sel.add(new Option(p.navn + (p.dynamisk ? '  (tid)' : ''), p.navn));
+    diffAktiv = false; ventProps = null;
+    fyllEgenskaper();
     const navn = m.props.map(p => p.navn);
     prop = ['PRESSURE', 'PORO'].find(n => navn.includes(n)) || navn[0];
     sel.value = prop;
@@ -289,7 +297,7 @@
     if (!grid) return;
     if (venter) { ko = true; return; }
     venter = true; ko = false;
-    worker.postMessage({ type: 'hud', id: ++hudId, filter: filter(), prop, steg, ref: refSteg() });
+    worker.postMessage({ type: 'hud', id: ++hudId, filter: filter(), prop, steg, ref: refSteg(), fordel: $('fordel').value });
   }
 
   function nyHud(m) {
@@ -305,7 +313,8 @@
     fjernMarkor();
     $('status').textContent = grid.nx + ' × ' + grid.ny + ' × ' + grid.nz + ' · ' +
       hel(m.antCeller) + ' av ' + hel(grid.antAktive) + ' celler · ' + hel(m.antFlater) + ' flater · ' + Math.round(m.tid) + ' ms' +
-      (grid.enhet && grid.enhet !== 'METRIC' ? ' · omregnet fra ' + grid.enhet + ' til SI' : '');
+      (grid.enhet && grid.enhet !== 'METRIC' ? ' · omregnet fra ' + grid.enhet + ' til SI' : '') +
+      (diffAktiv ? ' · differanse mot modellen til høyre' : '');
     visVolum(m.volum);
     if (m.omrade) {
       // Kartverdier har et annet verdiområde enn egenskapen selv; sett skalaen når kartet skifter.
@@ -322,6 +331,7 @@
     }
     tegn = true;
     if (ko) bestillHud();
+    else if (iRamme) window.parent.DELT.endret(window);
   }
 
   function visVolum(v) {
@@ -331,7 +341,83 @@
       '<tr><td>Porevolum</td><td>' + mm(v.pv) + '</td></tr>' +
       '<tr><td>HCPV' + (v.swNavn ? ' (Sw fra ' + v.swNavn + ')' : '') + '</td><td>' + mm(v.hcpv) + '</td></tr>' +
       (v.olje == null ? '' : '<tr><td>– olje</td><td>' + mm(v.olje) + '</td></tr><tr><td>– gass</td><td>' + mm(v.gass) + '</td></tr>');
+    // Fordeling på lag eller region, i Mm³.
+    regionRader = v.rader || null;
+    $('kopierRegioner').style.display = regionRader ? '' : 'none';
+    const t = x => x == null ? '–' : tall(x / 1e6);
+    $('regioner').innerHTML = !regionRader ? '' : '<table><tr><th>' + ($('fordel').value === 'K' ? 'Lag' : $('fordel').value) +
+      '</th><th>Bulk</th><th>PV</th><th>HCPV</th></tr>' +
+      regionRader.map(r => '<tr><td>' + r.id + '</td><td>' + t(r.bulk) + '</td><td>' + t(r.pv) + '</td><td>' + t(r.hcpv) + '</td></tr>').join('') + '</table>';
   }
+  let regionRader = null;
+  $('fordel').addEventListener('change', bestillHud);
+  $('kopierRegioner').addEventListener('click', () => {
+    if (!regionRader) return;
+    const k = ['id', 'celler', 'bulk', 'pv', 'hcpv', 'olje', 'gass'];
+    const tekst = [($('fordel').value === 'K' ? 'Lag' : $('fordel').value) + '\tCeller\tBulk (m3)\tPorevolum (m3)\tHCPV (m3)\tOlje (m3)\tGass (m3)']
+      .concat(regionRader.map(r => k.map(x => r[x] == null ? '' : String(r[x]).replace('.', ',')).join('\t'))).join('\n');
+    const ferdig = ok => { $('kopierRegioner').textContent = ok ? 'Kopiert' : 'Ikke kopiert'; setTimeout(() => { $('kopierRegioner').textContent = 'Kopier'; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(tekst).then(() => ferdig(true), () => ferdig(false)); else ferdig(false);
+  });
+
+  // ---------- egenskapslister og beregnede egenskaper ----------
+  let diffAktiv = false, ventProps = null, eksportId = 0;
+  const eksportVent = new Map();
+  function fyllEgenskaper() {
+    const sel = $('egenskap'), for_ = sel.value;
+    sel.innerHTML = '';
+    for (const p of grid.props) sel.add(new Option(p.navn + (p.uttrykk ? '  (beregnet)' : p.dynamisk ? '  (tid)' : ''), p.navn));
+    if (grid.props.some(p => p.navn === for_)) sel.value = for_;
+    // Volumene kan fordeles på lag eller på heltallsegenskaper (regioner).
+    const f = $('fordel'), fFor = f.value;
+    f.innerHTML = '';
+    f.add(new Option('Ingen fordeling', '')); f.add(new Option('Fordel på lag (K)', 'K'));
+    for (const p of grid.props) if (!p.dynamisk && /NUM$/.test(p.navn)) f.add(new Option('Fordel på ' + p.navn, p.navn));
+    f.value = Array.from(f.options).some(o => o.value === fFor) ? fFor : '';
+    for (const rad of $('filtre').children) {
+      const s = rad.children[0], v = s.value;
+      s.innerHTML = ''; s.add(new Option('Vist egenskap', ''));
+      for (const p of grid.props) s.add(new Option(p.navn, p.navn));
+      s.value = grid.props.some(p => p.navn === v) ? v : '';
+    }
+    const liste = $('beregnede');
+    liste.innerHTML = '';
+    for (const p of grid.props.filter(x => x.uttrykk)) {
+      const rad = document.createElement('div'); rad.className = 'beregnet';
+      const n = document.createElement('b'); n.textContent = p.navn;
+      const u = document.createElement('code'); u.textContent = '= ' + p.uttrykk; u.title = p.uttrykk;
+      const x = document.createElement('button'); x.className = 'liten'; x.textContent = '×'; x.setAttribute('aria-label', 'Fjern ' + p.navn);
+      x.addEventListener('click', () => worker.postMessage({ type: 'beregn', navn: p.navn, slett: true }));
+      rad.append(n, u, x); liste.appendChild(rad);
+    }
+  }
+  function nyeProps(m) {
+    grid.props = m.props;
+    fyllEgenskaper();
+    if (!m.stille) {
+      $('bFeil').textContent = m.feil || '';
+      if (!m.feil && m.valgt) { $('bNavn').value = ''; $('bUttrykk').value = ''; }
+    }
+    const finnes = grid.props.some(p => p.navn === prop);
+    if (ventProps) {
+      if (--ventProps.igjen <= 0) { const t = ventProps.t; ventProps = null; brukTilstand(t, true); }
+    } else if ((m.valgt && !m.feil) || !finnes) {
+      $('egenskap').value = m.valgt && !m.feil ? m.valgt : grid.props[0].navn;
+      $('egenskap').dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+  function leggTilBeregnet() {
+    if (!grid) return;
+    worker.postMessage({ type: 'beregn', navn: $('bNavn').value, uttrykk: $('bUttrykk').value });
+  }
+  $('bLegg').addEventListener('click', leggTilBeregnet);
+  for (const id of ['bNavn', 'bUttrykk']) $(id).addEventListener('keydown', e => { if (e.key === 'Enter') leggTilBeregnet(); });
+
+  // Differanse mot en annen modell (delt visning): den andre modellens viste verdier sendes hit.
+  function eksporter() {
+    return new Promise(ferdig => { const id = ++eksportId; eksportVent.set(id, ferdig); worker.postMessage({ type: 'eksport', id, prop, steg, ref: refSteg() }); });
+  }
+  function settEkstern(a) { worker.postMessage({ type: 'ekstern', a: a || null }, a ? [a.buffer] : []); }
 
   // ---------- egenskap, fargeskala og histogram ----------
   function velgEgenskap(ny) {
@@ -482,6 +568,19 @@
       if (erDynamisk()) worker.postMessage({ type: 'stat', prop, steg, ref: refSteg() });
     }
   }
+  // ---------- skjul/vis sidepanelet ----------
+  // I delt visning starter høyre halvdel uten panel, siden valgene vanligvis følger venstre.
+  let panelSkjult = false;
+  function visPanel(vis) {
+    panelSkjult = !vis;
+    $('panel').style.display = vis && grid ? 'block' : 'none';
+    $('apnePanel').style.display = !vis && grid ? 'block' : 'none';
+    document.body.classList.toggle('uten-panel', !vis);
+    storrelse();
+  }
+  $('skjulPanel').addEventListener('click', () => visPanel(false));
+  $('apnePanel').addEventListener('click', () => visPanel(true));
+
   // ---------- egenskapsfiltre ----------
   // Hver rad: egenskap (tomt valg = det som vises), fra og til. Alle rader må være oppfylt.
   function nyFilterRad() {
@@ -523,8 +622,8 @@
     const kan = erDynamisk() && grid.tider.length > 1;
     $('radEndring').style.display = kan ? '' : 'none';
     if (!kan) $('endring').checked = false;
-    const pa = $('endring').checked;
-    $('refSteg').style.display = pa ? '' : 'none';
+    $('refSteg').style.display = $('endring').checked ? '' : 'none';
+    const pa = $('endring').checked || diffAktiv;   // begge vises med divergerende fargekart
     if (pa && kartFor == null) { kartFor = $('fargekart').value; $('fargekart').value = 'endring'; }
     if (!pa && kartFor != null) { $('fargekart').value = kartFor; kartFor = null; }
   }
@@ -566,6 +665,7 @@
   }
   if (iRamme) {
     document.body.classList.add('i-ramme');
+    panelSkjult = window.frameElement && window.frameElement.dataset.side === 'hoyre';
     $('sammenlign').style.display = 'none';
     styring.addEventListener('change', () => { if (!synker && grid) window.parent.DELT.kamera(window, kameraTilstand()); });
     // Bare det brukeren selv gjør sendes videre (isTrusted), ellers ville halvdelene svart hverandre i ring.
@@ -580,20 +680,39 @@
     const andre = fra => ruter().map(r => r.contentWindow).filter(w => w !== fra && w.APP && w.APP.grid);
     window.DELT = {
       kamera(fra, k) { if ($('lasKamera').checked) for (const w of andre(fra)) w.APP.settKamera(k); },
-      valg(fra, id, verdi, type) { if ($('lasValg').checked) for (const w of andre(fra)) w.APP.settValg(id, verdi, type); }
+      valg(fra, id, verdi, type) { if ($('lasValg').checked) for (const w of andre(fra)) w.APP.settValg(id, verdi, type); },
+      // Høyre halvdel har tegnet noe nytt: differansen i venstre må regnes på nytt.
+      endret(fra) { const r = ruter(); if ($('visDiff').checked && r[1] && fra === r[1].contentWindow) oppdaterDiff(); }
     };
+    async function oppdaterDiff() {
+      const [V, H] = ruter().map(r => r.contentWindow);
+      $('diffMelding').textContent = '';
+      if (!V || !H || !V.APP || !H.APP || !V.APP.grid) return;
+      if (!$('visDiff').checked) return V.APP.settEkstern(null);
+      const a = V.APP.grid, b = H.APP.grid;
+      if (!b) { $('diffMelding').textContent = 'Åpne en modell til høyre først.'; return; }
+      if (a.nx !== b.nx || a.ny !== b.ny || a.nz !== b.nz) {
+        $('diffMelding').textContent = 'Modellene har ulike dimensjoner og kan ikke trekkes fra hverandre.';
+        return V.APP.settEkstern(null);
+      }
+      const verdier = await H.APP.eksporter();
+      if (verdier && $('visDiff').checked) V.APP.settEkstern(verdier);
+    }
+    $('visDiff').addEventListener('change', oppdaterDiff);
     $('sammenlign').addEventListener('click', () => {
       const boks = $('delt').querySelector('.ruter');
       boks.innerHTML = '';
       for (let n = 0; n < 2; n++) {
         const r = document.createElement('iframe');
         r.title = n ? 'Modell til høyre' : 'Modell til venstre';
+        r.dataset.side = n ? 'hoyre' : 'venstre';
         r.src = location.pathname;
         // Venstre halvdel starter med modellen som allerede er åpen.
         if (n === 0 && sisteFiler) r.addEventListener('load', () => r.contentWindow.APP.lastFiler(sisteFiler));
         boks.appendChild(r);
       }
       stoppSpill();
+      $('visDiff').checked = false; $('diffMelding').textContent = '';
       $('delt').style.display = 'grid';
     });
     $('avsluttDelt').addEventListener('click', () => {
@@ -612,6 +731,7 @@
     $('visKurver').style.display = har && !apen ? '' : 'none';
     document.body.classList.toggle('kurver-apen', har && apen);
     document.documentElement.style.setProperty('--kurve-h', $('kurver').offsetHeight + 'px');
+    storrelse();
     if (har && apen) KURVEPANEL.tegn();
   }
   function fyllKurveValg() {
@@ -621,10 +741,35 @@
     if (k) {
       if (k.felt) v.add(new Option('Hele feltet', ''));
       for (const n of k.bronner) v.add(new Option(n, n));
-      worker.postMessage({ type: 'kurver', navn: v.value });
+      ekstraKurver = [];
+      fyllKurveTillegg();
+      hentKurver();
     }
     apneKurver(!!k);
   }
+  // Tilleggsvalg: sammenlign med en annen brønn, og egne vektorer i egne figurer.
+  let ekstraKurver = [];
+  function fyllKurveTillegg() {
+    const k = grid.kurver, navn = $('kurveValg').value, med = $('kurveMed'), eks = $('kurveEkstra'), medFor = med.value;
+    med.innerHTML = ''; med.add(new Option('Sammenlign med …', ''));
+    for (const n of k.bronner) if (n !== navn) med.add(new Option(n, n));
+    med.value = navn && Array.from(med.options).some(o => o.value === medFor) ? medFor : '';
+    med.style.display = navn && k.nokler && k.nokler.W.length ? '' : 'none';
+    eks.innerHTML = ''; eks.add(new Option('+ Legg til kurve …', ''));
+    const nokler = (k.nokler || { W: [], F: [] })[navn ? 'W' : 'F'];
+    for (const n of nokler) if (!ekstraKurver.includes(n)) eks.add(new Option(n, n));
+    if (ekstraKurver.length) eks.add(new Option('Fjern egne kurver', '-'));
+    eks.style.display = nokler.length ? '' : 'none';
+  }
+  function hentKurver() {
+    worker.postMessage({ type: 'kurver', navn: $('kurveValg').value, ekstra: ekstraKurver, med: $('kurveMed').value });
+  }
+  $('kurveMed').addEventListener('change', hentKurver);
+  $('kurveEkstra').addEventListener('change', () => {
+    const v = $('kurveEkstra').value;
+    if (v === '-') ekstraKurver = []; else if (v) ekstraKurver.push(v);
+    fyllKurveTillegg(); hentKurver();
+  });
   function nyeKurver(m) {
     KURVEPANEL.vis($('kurveFig'), m, {
       velgTid: t => {
@@ -637,16 +782,21 @@
     });
     kurveTid();
     document.documentElement.style.setProperty('--kurve-h', $('kurver').offsetHeight + 'px');
+    storrelse();
   }
   function velgKurve(navn) {
     const v = $('kurveValg');
     if (!grid.kurver || !Array.from(v.options).some(o => o.value === navn)) return false;
     v.value = navn;
     apneKurver(true);
-    worker.postMessage({ type: 'kurver', navn });
+    ekstraKurver = ekstraKurver.filter(k => k[0] === 'W'); fyllKurveTillegg(); hentKurver();
     return true;
   }
-  $('kurveValg').addEventListener('change', () => worker.postMessage({ type: 'kurver', navn: $('kurveValg').value }));
+  $('kurveValg').addEventListener('change', () => {
+    const pre = $('kurveValg').value ? 'W' : 'F';
+    ekstraKurver = ekstraKurver.filter(k => k[0] === pre);
+    fyllKurveTillegg(); hentKurver();
+  });
   $('kurveLukk').addEventListener('click', () => apneKurver(false));
   $('visKurver').addEventListener('click', () => apneKurver(true));
 
@@ -706,6 +856,7 @@
     if (!grid || !grid.bronner.length) return;
     const z = zs(), b = grid.bbox, t = naa();
     const radius = 0.0013 * Math.hypot(b.x1 - b.x0, b.y1 - b.y0);
+    const perf = { apen: [], stengt: [] };
     grid.bronner.forEach((w, nr) => {
       if (skjult.bronn.has(nr)) return;
       // Bare koblinger som er åpnet til og med valgt tidspunkt tas med.
@@ -733,6 +884,15 @@
         color: farge, transparent: true, opacity: 0.22, depthTest: false, depthWrite: false }));
       gjennom.renderOrder = 5;
       bronnGruppe.add(ror, gjennom);
+      // Perforasjoner: koblingene som finnes på valgt tidspunkt, åpne eller stengte.
+      if (!w.bane && $('visPerf').checked) {
+        const apen = new Map();
+        for (const [tt, n, a] of w.apning || []) if (tt <= t) apen.set(n, a);
+        let bronnApen = 1;
+        for (const [tt, a] of w.status || []) if (tt <= t) bronnApen = a;
+        for (let n = 0; n < w.tider.length; n++) if (w.tider[n] <= t)
+          (!bronnApen || apen.get(n) === 0 ? perf.stengt : perf.apen).push(p[3 * n + 3], p[3 * n + 4] * z, p[3 * n + 5]);
+      }
       const el = document.createElement('div');
       el.className = 'etikett bronn ' + klasse;
       el.textContent = w.navn;
@@ -740,6 +900,16 @@
       $('etiketter').appendChild(el);
       etiketter.push({ el, pos: pkt[0], skaler: false, bronn: true, bredde: 7 * w.navn.length + 12 });
     });
+    // Alle perforasjoner tegnes som to instansierte kulesett (åpne og stengte).
+    for (const [slag, farge] of [['apen', '--perf'], ['stengt', '--dempet']]) {
+      const pos = perf[slag];
+      if (!pos.length) continue;
+      const kuler = new THREE.InstancedMesh(new THREE.SphereGeometry(radius * 2.1, 10, 8), new THREE.MeshLambertMaterial({ color: css(farge) }), pos.length / 3);
+      const m4 = new THREE.Matrix4();
+      for (let i = 0; i < pos.length; i += 3) kuler.setMatrixAt(i / 3, m4.makeTranslation(pos[i], pos[i + 1], pos[i + 2]));
+      kuler.frustumCulled = false;
+      bronnGruppe.add(kuler);
+    }
     tegn = true;
   }
 
@@ -824,8 +994,10 @@
     const b = boks();
     // Den frie flaten ved siden av panelet kan være smalere enn den er høy (delt visning, smalt
     // vindu); da er det den vannrette synsvinkelen som avgjør avstanden.
+    const friH = Math.max(200, window.innerHeight - $('kurver').offsetHeight) / window.innerHeight;
     const fri = Math.max(200, window.innerWidth - ($('panel').offsetWidth + 12)) / window.innerHeight;
-    const halv = Math.min(kamera.fov * Math.PI / 360, Math.atan(Math.tan(kamera.fov * Math.PI / 360) * fri));
+    const tanV = Math.tan(kamera.fov * Math.PI / 360);
+    const halv = Math.min(Math.atan(tanV * friH), Math.atan(tanV * fri));
     const avstand = b.r / Math.sin(halv) * 0.8;
     styring.target.copy(b.senter);
     // Se på tvers av modellens lengste horisontale akse, så den fyller skjermbredden.
@@ -871,8 +1043,9 @@
   function plukk(px, py) {
     if (!mesh || !mesh.visible || !hud || !hud.antFlater) return -1;
     const w = window.innerWidth, h = window.innerHeight;
-    const ox = kamera.view && kamera.view.enabled ? kamera.view.offsetX : 0;
-    kamera.setViewOffset(w, h, ox + px, py, 1, 1);
+    const harForskyvning = kamera.view && kamera.view.enabled;
+    const ox = harForskyvning ? kamera.view.offsetX : 0, oy = harForskyvning ? kamera.view.offsetY : 0;
+    kamera.setViewOffset(w, h, ox + px, oy + py, 1, 1);
     const gjemt = [];
     for (const o of [bronnGruppe, hjelpGruppe, forkastMesh, markor, ramme]) if (o && o.visible) { o.visible = false; gjemt.push(o); }
     const farge = renderer.getClearColor(new THREE.Color()), alfa = renderer.getClearAlpha();
@@ -1062,11 +1235,98 @@
   $('visForkast').addEventListener('change', forkastSynlig);
   $('forkastModus').addEventListener('change', byggForkast);
   $('sprang').addEventListener('change', byggForkast);
+  $('visPerf').addEventListener('change', byggBronner);
   $('visBronner').addEventListener('change', () => { bronnGruppe.visible = $('visBronner').checked; tegn = true; });
   $('tilpass').addEventListener('click', () => tilpass(false));
   $('ovenfra').addEventListener('click', () => tilpass(true));
-  $('apne').addEventListener('click', () => $('fil').click());
-  $('velg').addEventListener('click', () => $('fil').click());
+  // ---------- åpne fra nettet og huske sist brukte ----------
+  // Kjente åpne modeller. Norne: OPM/opm-tests (Open Database License).
+  const OPM = 'https://raw.githubusercontent.com/OPM/opm-tests/master/norne/';
+  const KJENTE = {
+    norne: ['NORNE_ATW2013.DATA', 'INCLUDE/GRID/IRAP_1005.GRDECL', 'INCLUDE/GRID/ACTNUM_0704.prop', 'INCLUDE/FAULT/FAULT_JUN_05.INC',
+      'INCLUDE/PETRO/PORO_0704.prop', 'INCLUDE/PETRO/NTG_0704.prop', 'INCLUDE/PETRO/PERM_0704.prop', 'INCLUDE/PETRO/SWINITIAL.INC',
+      'INCLUDE/PETRO/FIPNUM_0704.prop', 'INCLUDE/PETRO/EQLNUM_0704.prop', 'INCLUDE/BC0407_HIST01122006.SCH',
+      'opm-simulation-reference/flow_legacy/NORNE_ATW2013.SMSPEC', 'opm-simulation-reference/flow_legacy/NORNE_ATW2013.UNSMRY'].map(f => OPM + f)
+  };
+  async function lastFraNett(kilde) {
+    const adresser = (typeof kilde === 'string' ? KJENTE[kilde] : kilde) || [];
+    if (!adresser.length) return;
+    $('feil').style.display = 'none';
+    $('opptatt').style.display = 'block';
+    let ferdig = 0;
+    const vis = () => { $('opptatt').textContent = 'Henter filer … ' + ferdig + ' av ' + adresser.length; };
+    vis();
+    try {
+      const filer = await Promise.all(adresser.map(async u => {
+        if (!/^https?:\/\//i.test(u)) throw new Error('Bare http(s)-adresser kan åpnes: ' + u);
+        const r = await fetch(u);
+        if (!r.ok) throw new Error('Fikk ikke hentet ' + u + ' (' + r.status + ')');
+        const b = await r.blob();
+        ferdig++; vis();
+        return new File([b], decodeURIComponent(u.split(/[?#]/)[0].split('/').pop()));
+      }));
+      lastFiler(filer, kilde);
+      huskSist({ navn: typeof kilde === 'string' ? 'Norne-feltet' : filer[0].name + (filer.length > 1 ? ' + ' + (filer.length - 1) : ''), kilde });
+    } catch (err) {
+      visFeil(err && err.message ? err.message : String(err));
+    }
+  }
+  $('apneNorne').addEventListener('click', () => lastFraNett('norne'));
+  $('apneNett').addEventListener('click', () => lastFraNett($('nettAdresser').value.split(/\s+/).filter(Boolean)));
+
+  // Sist brukte modell: nettadresser huskes direkte. Lokale filer huskes som filreferanser
+  // (File System Access, der nettleseren støtter det); nettleseren spør om lov før de leses igjen.
+  const SIST = 'reservoarvisning.sist';
+  function db(skriv, verdi) {
+    return new Promise(resolve => {
+      let ap;
+      try { ap = indexedDB.open('reservoarvisning', 1); } catch (e) { return resolve(null); }
+      ap.onupgradeneeded = () => ap.result.createObjectStore('sist');
+      ap.onerror = () => resolve(null);
+      ap.onsuccess = () => {
+        const tx = ap.result.transaction('sist', skriv ? 'readwrite' : 'readonly'), lager = tx.objectStore('sist');
+        const rq = skriv ? lager.put(verdi, 'filer') : lager.get('filer');
+        rq.onsuccess = () => resolve(skriv ? true : rq.result || null);
+        rq.onerror = () => resolve(null);
+      };
+    });
+  }
+  function huskSist(s, referanser) {
+    try { localStorage.setItem(SIST, JSON.stringify({ navn: s.navn, kilde: s.kilde || null, lokal: !!referanser })); } catch (e) { /* uten lagring huskes ingenting */ }
+    if (referanser) db(true, referanser);
+    visSist();
+  }
+  function sist() { try { return JSON.parse(localStorage.getItem(SIST)); } catch (e) { return null; } }
+  function visSist() {
+    const s = sist();
+    $('radSist').style.display = s ? '' : 'none';
+    if (s) $('apneSist').textContent = 'Åpne sist brukte: ' + s.navn;
+  }
+  $('apneSist').addEventListener('click', async () => {
+    const s = sist();
+    if (!s) return;
+    if (s.kilde) return lastFraNett(s.kilde);
+    const ref = await db(false);
+    try {
+      if (!ref || !ref.length) throw new Error('mangler');
+      for (const h of ref) if ((await h.requestPermission({ mode: 'read' })) !== 'granted') throw new Error('nektet');
+      lastFiler(await Promise.all(ref.map(h => h.getFile())));
+    } catch (e) {
+      visFeil('Fikk ikke åpnet de sist brukte filene på nytt. Velg dem en gang til.');
+    }
+  });
+  const navnPa = filer => filer[0].name + (filer.length > 1 ? ' + ' + (filer.length - 1) + ' til' : '');
+  async function velgFiler() {
+    if (!window.showOpenFilePicker) return $('fil').click();
+    let ref;
+    try { ref = await window.showOpenFilePicker({ multiple: true }); } catch (e) { return; }   // avbrutt
+    const filer = await Promise.all(ref.map(h => h.getFile()));
+    lastFiler(filer);
+    huskSist({ navn: navnPa(filer) }, ref);
+  }
+  $('apne').addEventListener('click', velgFiler);
+  $('velg').addEventListener('click', velgFiler);
+  visSist();
   $('fil').addEventListener('change', e => { lastFiler(e.target.files); e.target.value = ''; });
   $('demo').addEventListener('click', () => {
     $('opptatt').style.display = 'block';
@@ -1090,19 +1350,27 @@
       ijk: IJK.map(id => +$(id).value), filtre: filterRader(), modus: $('modus').value,
       linje: $('modus').value === 'snitt' ? linje : null,
       kart: kartFor != null ? kartFor : $('fargekart').value, cmin: $('cmin').value, cmax: $('cmax').value, logg: $('logg').checked,
-      kryss, forkastModus: $('forkastModus').value
+      kryss, forkastModus: $('forkastModus').value,
+      beregnet: grid.props.filter(p => p.uttrykk).map(p => ({ navn: p.navn, uttrykk: p.uttrykk }))
     };
   }
   function brukSkala(s, behold) {
     if (!diskret || behold) { $('logg').checked = !!s.logg && !$('logg').disabled; $('cmin').value = s.cmin; $('cmax').value = s.cmax; }
     if (!behold) fargeskala();
   }
-  function brukTilstand(t) {
+  function brukTilstand(t, provd) {
     if (!grid || !t || t.v !== 1) return false;
     if (t.m && t.m !== modellNokkel()) {
       $('advarsel').textContent = 'Visningen ble laget for en modell med andre dimensjoner og er ikke brukt.';
       $('advarsel').style.display = 'block';
       return false;
+    }
+    // Beregnede egenskaper visningen bruker, må finnes før resten kan settes.
+    const mangler = (t.beregnet || []).filter(b => !grid.props.some(p => p.navn === b.navn && p.uttrykk === b.uttrykk));
+    if (mangler.length && !provd) {
+      ventProps = { t, igjen: mangler.length };
+      for (const b of mangler) worker.postMessage({ type: 'beregn', navn: b.navn, uttrykk: b.uttrykk, stille: true });
+      return true;
     }
     stoppSpill();
     const har = (id, v) => Array.from($(id).options).some(o => o.value === String(v));
@@ -1150,15 +1418,26 @@
     try { return JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g, '+').replace(/_/g, '/'))))); } catch (e) { return null; }
   }
   function lenkeTilstand() { const m = location.hash.match(/[#&]v=([\w-]+)/); return m ? dekod(m[1]) : null; }
+  // #m=norne, eller #m=u.<base64url av en liste med nettadresser>
+  function lenkeKilde() {
+    const m = location.hash.match(/[#&]m=([\w.-]+)/);
+    if (!m) return null;
+    if (KJENTE[m[1]]) return m[1];
+    const liste = m[1].startsWith('u.') ? dekod(m[1].slice(2)) : null;
+    return Array.isArray(liste) && liste.every(u => typeof u === 'string') ? liste : null;
+  }
+  const kildeHash = () => !modellKilde ? '' : 'm=' + (typeof modellKilde === 'string' ? modellKilde : 'u.' + kod(modellKilde)) + '&';
   ventLenke = lenkeTilstand();
-  if (ventLenke) {
+  const startKilde = lenkeKilde();
+  if (startKilde && !iRamme) lastFraNett(startKilde);
+  else if (ventLenke) {
     const p = document.createElement('p');
     p.textContent = 'Lenken inneholder en lagret visning. Åpne modellen den gjelder, så settes visningen automatisk.';
     $('velg').parentNode.insertBefore(p, $('velg'));
   }
   window.addEventListener('hashchange', () => { const t = lenkeTilstand(); if (t && grid) brukTilstand(t); });
   $('kopierLenke').addEventListener('click', () => {
-    const hash = '#v=' + kod(tilstand());
+    const hash = '#' + kildeHash() + 'v=' + kod(tilstand());
     history.replaceState(null, '', hash);
     const ferdig = ok => { $('kopierLenke').textContent = ok ? 'Kopiert' : 'Lenken står i adressefeltet'; setTimeout(() => { $('kopierLenke').textContent = 'Kopier lenke'; }, 1800); };
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(location.href).then(() => ferdig(true), () => ferdig(false));
@@ -1218,7 +1497,10 @@
       ctx.fillText(el.textContent, r.left + r.width / 2, r.top + r.height / 2 + 0.5);
     }
     // Fargeskala med egenskap, tidspunkt og grenser.
-    const x = 16, bredde = 240, y = H - 74;
+    // Tegnes forstørret, så teksten er lesbar også når bildet limes inn i et dokument.
+    const k = 1.6;
+    ctx.save(); ctx.translate(16, H - 12); ctx.scale(k, k);
+    const x = 0, bredde = 240, y = -62;
     ctx.fillStyle = css('--bg3d'); ctx.globalAlpha = 0.85; ctx.fillRect(x - 8, y - 12, bredde + 16, 74); ctx.globalAlpha = 1;
     ctx.textAlign = 'left'; ctx.fillStyle = css('--tekst'); ctx.font = '600 13px system-ui, "Segoe UI", sans-serif';
     const kart = kartModus() ? ' · ' + $('modus').selectedOptions[0].text : '';
@@ -1228,6 +1510,7 @@
     ctx.drawImage($('legende').querySelector('canvas'), x, y + 28, bredde, 10);
     ctx.fillText($('legMin').textContent, x, y + 49);
     ctx.textAlign = 'right'; ctx.fillText($('legMax').textContent, x + bredde, y + 49);
+    ctx.restore();
     return c;
   }
   function lagreBilde() {
@@ -1276,13 +1559,20 @@
   window.addEventListener('dragover', e => e.preventDefault());
   window.addEventListener('drop', e => {
     e.preventDefault(); dra = 0; $('slipp').style.display = 'none';
-    lastFiler(e.dataTransfer.files);
+    const filer = Array.from(e.dataTransfer.files);
+    // Filreferansene må hentes mens slipp-hendelsen pågår.
+    const ref = Array.from(e.dataTransfer.items || []).filter(i => i.kind === 'file' && i.getAsFileSystemHandle).map(i => i.getAsFileSystemHandle());
+    lastFiler(filer);
+    if (ref.length && filer.length) Promise.all(ref).then(r => {
+      r = r.filter(h => h && h.kind === 'file');
+      if (r.length === filer.length) huskSist({ navn: navnPa(filer) }, r);
+    }, () => {});
   });
 
   tema(); storrelse(); lagLut(); overdrivelse();
 
   // For feilsøking og automatisk testing i nettleseren.
   window.APP = { worker, get grid() { return grid; }, get hud() { return hud; }, get stat() { return stat; }, get steg() { return steg; },
-    get venter() { return venter || ko; }, kamera, tilpass, plukk, settSteg, visSnitt, lastFiler, settKamera, settValg, kameraTilstand, tilstand, brukTilstand, lagBilde,
+    get venter() { return venter || ko; }, kamera, tilpass, plukk, settSteg, visSnitt, lastFiler, settKamera, settValg, kameraTilstand, eksporter, settEkstern, tilstand, brukTilstand, lagBilde,
     kod, dekod, get visninger() { return visningene; } };
 })();

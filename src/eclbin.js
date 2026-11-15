@@ -77,6 +77,7 @@
   function filtype(idx) {
     const navn = new Set(idx.map(p => p.navn));
     if (navn.has('GRIDHEAD') && navn.has('ZCORN')) return 'grid';
+    if (navn.has('WELLETC')) return 'rft';
     if (navn.has('KEYWORDS')) return 'smspec';
     if (navn.has('PARAMS')) return 'unsmry';
     if (navn.has('SEQNUM')) return 'restart';
@@ -126,7 +127,31 @@
     return { start, tider, vektorer, serie };
   }
 
-  const ECLBIN = { bufferKilde, filKilde, erBinar, indeks, les, filtype, rapportsteg, sammendrag };
+  // RFT-fil: én måling per brønn og tidspunkt med trykk og metninger i hver koblet celle.
+  // Dybde og trykk regnes om til meter og bar når fila oppgir fot og psi (WELLETC[3] og [4]).
+  // Returnerer [{ bronn, tid, dybde, trykk, swat, sgas }] med målepunktene sortert etter dybde.
+  function rft(kilde, idx) {
+    const ut = [];
+    let e = null;
+    for (const p of idx) {
+      if (p.navn === 'TIME') { e = { bronn: '', tid: null, fd: 1, ft: 1 }; ut.push(e); continue; }
+      if (!e) continue;
+      if (p.navn === 'DATE') { const d = les(kilde, p, 3); e.tid = Date.UTC(d[2], d[1] - 1, d[0]); }
+      else if (p.navn === 'WELLETC') {
+        const w = les(kilde, p, 5);
+        e.bronn = w[1]; e.fd = /^FEET/i.test(w[3] || '') ? 0.3048 : 1; e.ft = /^PSI/i.test(w[4] || '') ? 0.0689476 : 1;
+      }
+      else if (p.navn === 'DEPTH' || p.navn === 'PRESSURE' || p.navn === 'SWAT' || p.navn === 'SGAS') e[p.navn] = p;
+    }
+    return ut.filter(x => x.bronn && x.tid != null && x.DEPTH && x.PRESSURE).map(x => {
+      const d = les(kilde, x.DEPTH), t = les(kilde, x.PRESSURE), sw = x.SWAT ? les(kilde, x.SWAT) : null, sg = x.SGAS ? les(kilde, x.SGAS) : null;
+      const rek = Array.from(d.keys()).sort((a, b) => d[a] - d[b]);
+      const tab = (a, f) => a ? Float32Array.from(rek, i => a[i] * f) : null;
+      return { bronn: x.bronn, tid: x.tid, dybde: tab(d, x.fd), trykk: tab(t, x.ft), swat: tab(sw, 1), sgas: tab(sg, 1) };
+    });
+  }
+
+  const ECLBIN = { bufferKilde, filKilde, erBinar, indeks, les, filtype, rapportsteg, sammendrag, rft };
   root.ECLBIN = ECLBIN;
   if (typeof module !== 'undefined' && module.exports) module.exports = ECLBIN;
 })(typeof self !== 'undefined' ? self : globalThis);

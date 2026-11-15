@@ -9,11 +9,40 @@ let g = null;
 let dyn = null;          // { kilde, steg: [{ tid, poster }], navn: [..], aktiv: Int32Array }
 let tider = [];          // tidsaksen: rapportsteg fra UNRST, ellers datoene i SCHEDULE
 let sisteHud = null;     // { celle, verdiFlate } for siste flatesett
+let rftData = [];        // RFT-målinger, se ECLBIN.rft
 let smry = null;         // sammendragsdata fra SMSPEC/UNSMRY, se ECLBIN.sammendrag
 const hurtig = new Map();   // nylig leste dynamiske tabeller
 const statistikker = new Map();
 
-const erDynamisk = navn => !!dyn && dyn.navn.includes(navn) && !g.props[navn];
+// Beregnede egenskaper: navn → { tekst, u (se GRID.uttrykk), dynamisk }. Statiske regnes ut én
+// gang og legges i g.props; de som avhenger av tid, regnes ut for hvert tidssteg ved behov.
+const avledet = new Map();
+let ekstern = null;      // tabell fra en annen modell (delt visning); vises som differanse mot den
+const erDynamisk = navn => (!!dyn && dyn.navn.includes(navn) && !g.props[navn]) || (avledet.has(navn) && avledet.get(navn).dynamisk);
+
+function definer(navn, tekst) {
+  navn = String(navn || '').trim().toUpperCase();
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(navn)) throw new Error('Navnet må bestå av bokstaver, tall og understrek, og kan ikke starte med et tall.');
+  if (!avledet.has(navn) && (g.props[navn] || (dyn && dyn.navn.includes(navn)))) throw new Error(navn + ' finnes allerede i modellen. Velg et annet navn.');
+  const u = GRID.uttrykk(tekst);
+  for (const d of u.avhenger) {
+    if (d === navn) throw new Error('En egenskap kan ikke avhenge av seg selv.');
+    if (!g.props[d] && !erDynamisk(d)) throw new Error('Ukjent egenskap: ' + d);
+  }
+  const dynamisk = u.avhenger.some(erDynamisk);
+  if (dynamisk) delete g.props[navn];
+  else g.props[navn] = u.beregn(d => g.props[d], g.n);
+  avledet.set(navn, { tekst, u, dynamisk });
+  for (const k of Array.from(hurtig.keys())) if (k.startsWith(navn + '|')) hurtig.delete(k);
+  statistikker.delete(navn);
+  return navn;
+}
+function propListe() {
+  const merk = p => (avledet.has(p.navn) ? Object.assign(p, { uttrykk: avledet.get(p.navn).tekst }) : p);
+  const statiske = Object.keys(g.props).filter(p => p !== 'DEPTH').map(p => ({ navn: p, dynamisk: false }));
+  const dynamiske = (dyn ? dyn.navn.filter(p => !g.props[p]) : []).concat(Array.from(avledet.keys()).filter(p => avledet.get(p).dynamisk));
+  return statiske.concat(dynamiske.map(p => ({ navn: p, dynamisk: true })), [{ navn: 'DEPTH', dynamisk: false }]).map(merk);
+}
 
 // Egenskapen som tabell over alle celler (NaN i inaktive) for et tidssteg.
 function hentProp(navn, steg) {
@@ -22,6 +51,12 @@ function hentProp(navn, steg) {
   if (!erDynamisk(navn)) return null;
   const s = Math.max(0, Math.min(dyn.steg.length - 1, steg | 0)), nokkel = navn + '|' + s;
   if (hurtig.has(nokkel)) return hurtig.get(nokkel);
+  if (avledet.has(navn)) {
+    const r = avledet.get(navn).u.beregn(d => hentProp(d, s), g.n);
+    if (hurtig.size >= 8) hurtig.delete(hurtig.keys().next().value);
+    hurtig.set(nokkel, r);
+    return r;
+  }
   const ut = new Float32Array(g.n).fill(NaN), post = dyn.steg[s].poster[navn];
   if (post && post.ant === dyn.aktiv.length) {
     const a = ECLBIN.les(dyn.kilde, post);
@@ -35,6 +70,13 @@ function hentProp(navn, steg) {
 
 // Det som vises: egenskapen selv, eller endringen siden et referansesteg (verdi − referanse).
 function hentVist(navn, steg, ref) {
+  const egen = hentEgen(navn, steg, ref);
+  if (!ekstern || !egen || ekstern.length !== g.n) return egen;
+  const ut = new Float32Array(g.n);
+  for (let c = 0; c < g.n; c++) ut[c] = egen[c] - ekstern[c];
+  return ut;
+}
+function hentEgen(navn, steg, ref) {
   const a = hentProp(navn, steg);
   if (ref == null || !a || !erDynamisk(navn)) return a;
   const nokkel = navn + '|' + steg + '−' + ref;
@@ -52,13 +94,15 @@ function stat(navn, steg, ref) {
   const a = hentProp(navn, steg);
   if (!a) return null;
   // Endring: statistikk for differansen i valgt steg; fortegnet gjør logskala meningsløs.
-  if (ref != null && erDynamisk(navn))
+  if (ekstern || (ref != null && erDynamisk(navn)))
     return Object.assign({}, GRID.statistikk(g, hentVist(navn, steg, ref)), { unike: null, minPos: null, histLog: null, endring: true });
   if (!erDynamisk(navn)) {
     if (!statistikker.has(navn)) statistikker.set(navn, GRID.statistikk(g, a));
     return statistikker.get(navn);
   }
   const s = GRID.statistikk(g, a);
+  // Beregnede egenskaper finnes ikke i fila; da gjelder skalaen det valgte tidssteget.
+  if (avledet.has(navn)) return Object.assign({}, s, { unike: null });
   if (!statistikker.has(navn)) {
     let min = Infinity, max = -Infinity, minPos = Infinity;
     for (const st of dyn.steg) {
@@ -104,8 +148,12 @@ const KURVER = [
   { tittel: 'Trykk', enhet: 'BARSA', serier: [['BHP', 'Bunnhullstrykk', 'trykk'], ['PR', 'Reservoartrykk', 'trykk']] },
   { tittel: 'Vannkutt', enhet: '', serier: [['WCT', 'Vannkutt', 'vann']] }
 ];
-function kurver(navn) {
-  if (!smry) return null;
+function kurver(navn, ekstra, med) {
+  if (!smry) {
+    // Uten sammendragsfil kan RFT-målingene fortsatt vises.
+    const r = rftData.filter(x => x.bronn === navn);
+    return rftData.length ? { navn: navn || '', tider: Float64Array.from(r, x => x.tid), figurer: [], rft: r } : null;
+  }
   const felt = !navn, pre = felt ? 'F' : 'W';
   const finn = k => smry.vektorer.findIndex(v => v.nokkel === k && (felt || v.navn === navn));
   const figurer = [];
@@ -124,13 +172,33 @@ function kurver(navn) {
     }
     if (serier.length) figurer.push({ tittel: K.tittel, enhet, serier });
   }
-  return { navn: navn || '', tider: smry.tider, figurer };
+  // Sammenlign med en annen brønn: de samme (simulerte) vektorene tegnes i nøytral farge.
+  if (!felt && med && med !== navn) for (const fig of figurer) for (const s of fig.serier.filter(x => !x.hist)) {
+    const nr = smry.vektorer.findIndex(v => v.nokkel === s.nokkel && v.navn === med);
+    if (nr < 0) continue;
+    const f = GRID.enhetSI(smry.vektorer[nr].enhet)[0], v = smry.serie(nr);
+    for (let i = 0; i < v.length; i++) v[i] *= f;
+    fig.serier.push({ nokkel: s.nokkel, etikett: med, farge: 'andre', hist: false, verdier: v });
+  }
+  // Egne kurver: en hvilken som helst vektor for brønnen eller feltet, i sin egen figur.
+  for (const k of ekstra || []) {
+    const nr = finn(k);
+    if (nr < 0) continue;
+    const [f, e] = GRID.enhetSI(smry.vektorer[nr].enhet), v = smry.serie(nr);
+    for (let i = 0; i < v.length; i++) v[i] *= f;
+    figurer.push({ tittel: k, enhet: e, egen: true, serier: [{ nokkel: k, etikett: k, farge: 'trykk', hist: false, verdier: v }] });
+  }
+  return { navn: navn || '', tider: smry.tider, figurer, rft: felt ? [] : rftData.filter(x => x.bronn === navn) };
 }
 function kurveNavn() {
-  if (!smry) return null;
-  const s = new Set();
-  for (const v of smry.vektorer) if (v.nokkel[0] === 'W' && v.navn) s.add(v.navn);
-  return { bronner: Array.from(s).sort(), felt: smry.vektorer.some(v => v.nokkel[0] === 'F'), t0: smry.tider[0], t1: smry.tider[smry.tider.length - 1] };
+  if (!smry) return rftData.length ? { bronner: Array.from(new Set(rftData.map(x => x.bronn))).sort(), felt: false, nokler: { W: [], F: [] } } : null;
+  const s = new Set(), W = new Set(), F = new Set();
+  for (const v of smry.vektorer) {
+    if (v.nokkel[0] === 'W' && v.navn) { s.add(v.navn); W.add(v.nokkel); }
+    else if (v.nokkel[0] === 'F') F.add(v.nokkel);
+  }
+  for (const r of rftData) s.add(r.bronn);
+  return { bronner: Array.from(s).sort(), felt: F.size > 0, nokler: { W: Array.from(W).sort(), F: Array.from(F).sort() }, t0: smry.tider[0], t1: smry.tider[smry.tider.length - 1] };
 }
 
 function sendGrid(t0, navn, kw, baner, advarsler) {
@@ -150,9 +218,7 @@ function sendGrid(t0, navn, kw, baner, advarsler) {
     else bronner.push({ navn: b.navn, type: null, fase: null, typer: [], punkter: pkt, tider: new Float64Array(0), antKoblinger: 0, bane: true });
   }
   tider = dyn ? dyn.steg.map(s => s.tid) : GRID.tidspunkter(hendelser);
-  const navnene = Object.keys(g.props).filter(p => p !== 'DEPTH');
-  const props = navnene.map(p => ({ navn: p, dynamisk: false }))
-    .concat(dyn ? dyn.navn.filter(p => !g.props[p]).map(p => ({ navn: p, dynamisk: true })) : [], [{ navn: 'DEPTH', dynamisk: false }]);
+  const props = propListe();
   postMessage({
     type: 'grid', navn, nx: g.nx, ny: g.ny, nz: g.nz, antAktive: g.antAktive, bbox: g.bbox, origo: g.origo, enhet: g.enhet,
     props, forkast, bronner, tider, advarsler, kurver: kurveNavn(), tid: performance.now() - t0
@@ -229,6 +295,8 @@ function lesFiler(filer) {
     if (steg.length && navn.length) dyn = { kilde: rs.kilde, steg, navn, aktiv: Int32Array.from(aktiv) };
     else advarsler.push(rs.f.name + ': antall aktive celler stemmer ikke med gridet. Slipp EGRID-fila fra samme kjøring sammen med UNRST.');
   }
+  rftData = [];
+  for (const b of binar.filter(x => x.type === 'rft')) rftData = rftData.concat(ECLBIN.rft(b.kilde, b.idx));
   smry = null;
   const sp = binar.find(x => x.type === 'smspec'), su = binar.find(x => x.type === 'unsmry');
   if (sp && su) {
@@ -244,7 +312,7 @@ onmessage = function (e) {
   try {
     const t0 = performance.now();
     if (m.type === 'filer' || m.type === 'demo') {
-      hurtig.clear(); statistikker.clear(); sisteHud = null; dyn = null; smry = null;
+      hurtig.clear(); statistikker.clear(); sisteHud = null; dyn = null; smry = null; rftData = []; avledet.clear(); ekstern = null;
       let kw, baner = [], advarsler = [], navn = 'Eksempelmodell (syntetisk)';
       if (m.type === 'filer') {
         ({ kw, baner, advarsler } = lesFiler(m.filer));
@@ -254,8 +322,23 @@ onmessage = function (e) {
       sendGrid(t0, navn, kw, baner, advarsler);
     } else if (!g) {
       return;
+    } else if (m.type === 'beregn') {
+      let feil = null, valgt = null;
+      try {
+        if (m.slett) { avledet.delete(m.navn); delete g.props[m.navn]; statistikker.delete(m.navn); }
+        else valgt = definer(m.navn, m.uttrykk);
+      } catch (err) { feil = err.message; }
+      postMessage({ type: 'props', props: propListe(), valgt, feil, stille: !!m.stille });
+    } else if (m.type === 'eksport') {
+      // Kopi av det som vises, til differanse mot en annen modell i delt visning.
+      const a = hentEgen(m.prop, m.steg, m.ref);
+      postMessage({ type: 'eksport', id: m.id, a: a ? Float32Array.from(a) : null, n: g.n });
+    } else if (m.type === 'ekstern') {
+      ekstern = m.a && m.a.length === g.n ? m.a : null;
+      for (const k of Array.from(statistikker.keys())) statistikker.delete(k);
+      postMessage({ type: 'ekstern', aktiv: !!ekstern, passer: !m.a || m.a.length === g.n });
     } else if (m.type === 'kurver') {
-      const k = kurver(m.navn);
+      const k = kurver(m.navn, m.ekstra, m.med);
       if (k) postMessage(Object.assign({ type: 'kurver' }, k));
     } else if (m.type === 'hud') {
       const f = m.filter, a = hentVist(m.prop, m.steg, m.ref);
@@ -266,6 +349,11 @@ onmessage = function (e) {
       const sw = metning(m.steg);
       const vol = GRID.volum(g, h.syn, { poro: g.props.PORO, ntg: g.props.NTG, porv: g.props.PORV, sw: sw && sw.a, sg: sw && hentProp('SGAS', m.steg) });
       vol.swNavn = sw ? sw.navn : null;
+      // Volumene fordelt på lag eller på en heltallsegenskap (FIPNUM, EQLNUM …).
+      if (m.fordel) {
+        const kl = m.fordel === 'K' ? null : hentProp(m.fordel, m.steg);
+        if (m.fordel === 'K' || kl) vol.rader = GRID.volumPer(g, h.syn, { poro: g.props.PORO, ntg: g.props.NTG, porv: g.props.PORV, sw: sw && sw.a, sg: sw && hentProp('SGAS', m.steg) }, kl);
+      }
       sisteHud = { celle: h.celle.slice(), verdiFlate: h.verdiFlate || null };
       const verdi = verdierPerHjorne(h.celle, a, h.verdiFlate);
       postMessage({

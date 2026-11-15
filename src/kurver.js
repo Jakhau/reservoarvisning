@@ -4,9 +4,9 @@
 (function () {
   'use strict';
   const css = navn => getComputedStyle(document.documentElement).getPropertyValue(navn).trim();
-  const FARGE = { olje: '--olje', vann: '--vann', gass: '--gass', trykk: '--tekst' };
+  const FARGE = { olje: '--olje', vann: '--vann', gass: '--gass', trykk: '--tekst', andre: '--dempet' };
   const ENHET = { 'SM3/DAY': 'Sm³/d', 'RM3/DAY': 'Rm³/d', 'BARSA': 'bar', 'BAR': 'bar', 'SM3/SM3': 'Sm³/Sm³', '': '' };
-  const kort = v => Math.abs(v) >= 1e4 ? v.toLocaleString('nb-NO', { notation: 'compact', maximumSignificantDigits: 3 })
+  const kort = v => Math.abs(v) < 1e-9 ? '0' : Math.abs(v) >= 1e4 ? v.toLocaleString('nb-NO', { notation: 'compact', maximumSignificantDigits: 3 })
     : v.toLocaleString('nb-NO', { maximumSignificantDigits: 3 });
   const dato = t => new Date(t).toLocaleDateString('nb-NO', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
   const M = { v: 46, h: 8, t: 6, b: 18 };   // marger rundt tegneflaten
@@ -61,7 +61,52 @@
       c.addEventListener('pointerdown', e => { c.setPointerCapture(e.pointerId); if (velgTid) velgTid(tilTid(e)); });
       return fig;
     });
+    // RFT: trykk mot dyp for målingen nærmest valgt tid. Dybden øker nedover, som i en brønnlogg.
+    if (d.rft && d.rft.length) {
+      const boks = document.createElement('div'); boks.className = 'fig';
+      const h = document.createElement('h3'), c = document.createElement('canvas'), leg = document.createElement('div');
+      leg.className = 'leg';
+      c.setAttribute('role', 'img'); c.setAttribute('aria-label', 'RFT-trykk mot dyp for ' + d.navn);
+      boks.append(h, c, leg); el.appendChild(boks);
+      figurer.push({ rft: d.rft, c, h, leg });
+    }
     tegn();
+  }
+
+  function tegnRft(g, les, farger) {
+    const c = g.c, W = c.clientWidth, H = c.clientHeight, dpr = window.devicePixelRatio || 1;
+    if (!W || !H) return;
+    let e = g.rft[g.rft.length - 1];
+    if (les != null) for (const x of g.rft) if (Math.abs(x.tid - les) < Math.abs(e.tid - les)) e = x;
+    g.h.textContent = 'RFT · trykk (bar) mot dyp (m)';
+    g.leg.textContent = 'Måling ' + dato(e.tid) + ' · ' + e.dybde.length + ' punkter';
+    if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+    const ctx = c.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    const pw = W - M.v - M.h, ph = H - M.t - M.b;
+    let x0 = Infinity, x1 = -Infinity;
+    for (const v of e.trykk) { if (v < x0) x0 = v; if (v > x1) x1 = v; }
+    const pad = (x1 - x0) * 0.08 || 1; x0 -= pad; x1 += pad;
+    const d0 = e.dybde[0], d1 = e.dybde[e.dybde.length - 1] > d0 ? e.dybde[e.dybde.length - 1] : d0 + 1;
+    const X = v => M.v + (v - x0) / (x1 - x0) * pw, Y = v => M.t + (v - d0) / (d1 - d0) * ph;
+    ctx.font = '10px system-ui, sans-serif'; ctx.lineWidth = 1; ctx.strokeStyle = farger.kant; ctx.fillStyle = farger.dempet;
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let n = 0; n <= 2; n++) {
+      const v = d0 + (d1 - d0) * n / 2, y = Math.round(Y(v)) + 0.5;
+      ctx.beginPath(); ctx.moveTo(M.v, y); ctx.lineTo(W - M.h, y); ctx.stroke();
+      ctx.fillText(kort(Math.round(v)), M.v - 5, y);
+    }
+    ctx.textBaseline = 'top';
+    for (let n = 0; n <= 2; n++) {
+      const v = x0 + (x1 - x0) * n / 2;
+      ctx.textAlign = n === 0 ? 'left' : n === 2 ? 'right' : 'center';
+      ctx.fillText(kort(v), X(v), M.t + ph + 5);
+    }
+    ctx.strokeStyle = farger.tekst; ctx.fillStyle = farger.tekst; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < e.dybde.length; i++) { if (i) ctx.lineTo(X(e.trykk[i]), Y(e.dybde[i])); else ctx.moveTo(X(e.trykk[i]), Y(e.dybde[i])); }
+    ctx.stroke();
+    for (let i = 0; i < e.dybde.length; i++) { ctx.beginPath(); ctx.arc(X(e.trykk[i]), Y(e.dybde[i]), 2.5, 0, 6.2832); ctx.fill(); }
   }
 
   // Indeksen til siste ministeg som ikke er senere enn t.
@@ -74,11 +119,12 @@
 
   function tegn() {
     if (!data) return;
-    const t = data.tider, t0 = t[0], t1 = t[t.length - 1], dpr = window.devicePixelRatio || 1;
+    const t = data.tider, t0 = t.length ? t[0] : 0, t1 = t.length ? t[t.length - 1] : 0, dpr = window.devicePixelRatio || 1;
     const kant = css('--kant'), dempet = css('--dempet'), markor = css('--markor'), tekst = css('--tekst');
     const les = peker != null ? peker : tid;
-    const iLes = les != null && les >= t0 && les <= t1 ? indeks(les) : -1;
+    const iLes = t.length && les != null && les >= t0 && les <= t1 ? indeks(les) : -1;
     for (const g of figurer) {
+      if (g.rft) { tegnRft(g, les, { kant, dempet, tekst }); continue; }
       const c = g.c, W = c.clientWidth, H = c.clientHeight;
       if (!W || !H) continue;
       if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
@@ -138,7 +184,7 @@
       });
     }
     const ut = document.getElementById('kurveLes');
-    if (ut) ut.textContent = iLes < 0 ? '' : dato(t[iLes]);
+    if (ut) ut.textContent = iLes < 0 ? (les != null ? dato(les) : '') : dato(t[iLes]);
   }
 
   window.KURVEPANEL = { vis, tegn, settTid(t) { tid = t; tegn(); }, tom() { data = null; figurer = []; } };

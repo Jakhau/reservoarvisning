@@ -10,12 +10,12 @@
   const POSTLISTE = new Set([
     'OPERATE', 'OPERATER', 'EQUALREG', 'COPYREG', 'MULTIREG', 'ADDREG', 'MULTFLT', 'NNC', 'EDITNNC',
     'MULTREGT', 'AQUNUM', 'AQUCON', 'THPRESFT', 'PINCHREG',
-    'WELOPEN', 'WRFTPLT', 'WTRACER', 'WTEST', 'WPAVE', 'GRUPTREE', 'GCONINJE', 'GCONPROD',
+    'WRFTPLT', 'WTRACER', 'WTEST', 'WPAVE', 'GRUPTREE', 'GCONINJE', 'GCONPROD',
     'WELTARG', 'WECON', 'WGRUPCON', 'WELSEGS', 'COMPSEGS', 'WSEGVALV', 'COMPLUMP', 'WPIMULT'
   ]);
   // Postlister som tas vare på. Hver post blir en liste med tall, tekster og null (standardverdi).
   // De lagres per nøkkelord i ut._poster og i filrekkefølge i ut._hendelser (for tidsutvikling).
-  const FANG = new Set(['FAULTS', 'WELSPECS', 'COMPDAT', 'WCONHIST', 'WCONPROD', 'WCONINJE', 'WCONINJH', 'DATES']);
+  const FANG = new Set(['FAULTS', 'WELSPECS', 'COMPDAT', 'WCONHIST', 'WCONPROD', 'WCONINJE', 'WCONINJH', 'WELOPEN', 'DATES']);
   // Operasjoner på egenskaper i en boks; lagres i ut._ops og utføres i rekkefølge av GRID.lagGrid.
   const OPS = new Set(['EQUALS', 'COPY', 'MULTIPLY', 'ADD', 'MINVALUE', 'MAXVALUE']);
 

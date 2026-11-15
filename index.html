@@ -10,7 +10,7 @@
     --tekst: #17202a; --dempet: #5d6b7a; --aksent: #0b6bcb; --aksent-tekst: #ffffff;
     --feil: #b3261e; --cellekant: #1b2430; --markor: #ff2d7a;
     --prod: #1a8f3c; --inj: #1668d6; --forkast: #d9480f; --ramme: #8a96a3;
-    --olje: #1a8f3c; --vann: #1668d6; --gass: #c9302c;
+    --olje: #1a8f3c; --vann: #1668d6; --gass: #c9302c; --perf: #b8860b;
     --skygge: 0 6px 24px rgba(20,30,45,.14);
     color-scheme: light dark;
   }
@@ -20,7 +20,7 @@
       --tekst: #e8edf2; --dempet: #98a5b3; --aksent: #5aa9ff; --aksent-tekst: #0b1622;
       --feil: #ff8a80; --cellekant: #05080b; --markor: #ff5c9a;
       --prod: #4fd67a; --inj: #6db3ff; --forkast: #ff7a3d; --ramme: #6b7786;
-      --olje: #2fa558; --vann: #3d87dd; --gass: #dc5148;
+      --olje: #2fa558; --vann: #3d87dd; --gass: #dc5148; --perf: #ffd24d;
       --skygge: 0 6px 24px rgba(0,0,0,.5);
     }
   }
@@ -44,10 +44,19 @@
   .rad output { width: 62px; text-align: right; font-variant-numeric: tabular-nums; color: var(--dempet); }
   .dobbel { flex: 1; display: grid; }
   input[type=range] { width: 100%; margin: 1px 0; accent-color: var(--aksent); min-width: 0; }
-  select, input[type=number], button { font: inherit; color: var(--tekst); background: var(--flate2);
+  select, input[type=number], input[type=text], button { font: inherit; color: var(--tekst); background: var(--flate2);
     border: 1px solid var(--kant); border-radius: 6px; padding: 5px 8px; }
   select { width: 100%; }
-  input[type=number] { width: 100%; min-width: 0; }
+  input[type=number], input[type=text] { width: 100%; min-width: 0; }
+  details details { border-top: none; margin-top: 8px; padding-top: 0; }
+  #bFeil { color: var(--feil); font-size: 12px; }
+  .beregnet { display: flex; gap: 6px; align-items: center; font-size: 12px; margin: 3px 0; }
+  .beregnet code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dempet); }
+  #regioner { max-height: 190px; overflow: auto; margin-top: 6px; scrollbar-width: thin; }
+  #regioner table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+  #regioner th, #regioner td { text-align: right; padding: 1px 4px; }
+  #regioner th { position: sticky; top: 0; background: var(--flate2); color: var(--dempet); font-weight: 600; }
+  #regioner td:first-child, #regioner th:first-child { text-align: left; }
   input:disabled, select:disabled { opacity: .5; }
   button { cursor: pointer; }
   button:hover { border-color: var(--aksent); }
@@ -80,6 +89,12 @@
   #velkommen h1 { font-size: 20px; margin-bottom: 8px; }
   #velkommen p { color: var(--dempet); margin: 0 0 18px; }
   #velkommen .knapper { justify-content: center; }
+  #velkommen .knapper { justify-content: center; }
+  #velkommen details { text-align: left; }
+  #velkommen textarea { width: 100%; font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--tekst); background: var(--flate2);
+    border: 1px solid var(--kant); border-radius: 6px; padding: 6px 8px; resize: vertical; }
+  #velkommen p.kilde { font-size: 12px; margin: 14px 0 0; }
+  a { color: var(--aksent); }
   #feil { color: var(--feil); margin-top: 12px; display: none; }
   #slipp { position: fixed; inset: 8px; border: 2px dashed var(--aksent); border-radius: 14px;
     display: none; place-items: center; font-size: 18px; font-weight: 600; color: var(--aksent);
@@ -92,6 +107,8 @@
   .etikett.ukjent { color: var(--dempet); }
   .etikett.akse { color: var(--dempet); border: none; background: none; font-weight: 500; font-variant-numeric: tabular-nums; }
   .prikk.forkast::before { color: var(--forkast); }
+  .prikk.perf::before { color: var(--perf); }
+  .prikk.stengt::before { color: var(--dempet); }
   .prikk::before { content: "\25CF"; margin-right: 4px; }
   .forklaring { color: var(--dempet); font-size: 12px; margin: -2px 0 4px 22px; display: flex; gap: 10px; }
   .filter { display: grid; grid-template-columns: 1fr 58px 58px 24px; gap: 4px; margin: 4px 0; align-items: center; }
@@ -111,6 +128,9 @@
   #hjelp table { border-collapse: collapse; margin-top: 8px; }
   #hjelp td { padding: 3px 14px 3px 0; }
   kbd { font: 600 11px/1 ui-monospace, Consolas, monospace; padding: 3px 6px; border: 1px solid var(--kant); border-radius: 4px; background: var(--flate2); }
+  #skjulPanel { float: right; margin: -4px -4px 0 6px; }
+  #apnePanel { position: fixed; top: 12px; left: 12px; display: none; padding: 6px 10px; }
+  body.uten-panel #kurver { left: 12px; }
   #kurver { position: fixed; left: 314px; right: 12px; bottom: 12px; padding: 10px 12px 8px; display: none; }
   #kurver header { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
   #kurver header select { width: auto; max-width: 220px; }
@@ -134,6 +154,7 @@
 <div id="etiketter"></div>
 
 <aside id="panel" class="kort">
+  <button id="skjulPanel" class="liten" title="Skjul panelet" aria-label="Skjul panelet">«</button>
   <h1>Reservoarvisning</h1>
   <div id="modellnavn"></div>
   <div id="advarsel" role="alert"></div>
@@ -156,6 +177,15 @@
       <option value="spektral">Spektral (blå–rød)</option>
       <option value="endring">Endring (blå–grå–rød)</option>
     </select>
+    <details id="dBeregn">
+      <summary>Beregn egenskap</summary>
+      <div id="beregnede"></div>
+      <div class="to"><input type="text" id="bNavn" placeholder="Navn, f.eks. SOIL" aria-label="Navn på ny egenskap" spellcheck="false">
+        <button id="bLegg">Legg til</button></div>
+      <input type="text" id="bUttrykk" placeholder="1 - SWAT - SGAS" aria-label="Uttrykk" spellcheck="false" style="margin-top:4px">
+      <div id="bFeil" role="alert"></div>
+      <div class="hjelp">+ − * / ^, sammenligninger, parenteser og abs, sqrt, exp, ln, log10, min, max, hvis(betingelse, a, b)</div>
+    </details>
   </details>
 
   <details open id="dTid">
@@ -198,6 +228,9 @@
   <details open id="dVolum">
     <summary>Volum i utsnittet</summary>
     <table class="tall" id="volum"></table>
+    <div class="rad" style="margin-top:6px"><select id="fordel" aria-label="Fordel volumene på"></select>
+      <button id="kopierRegioner" class="liten" style="display:none" title="Kopier tabellen til utklippstavlen (limes rett inn i regneark)">Kopier</button></div>
+    <div id="regioner"></div>
   </details>
 
   <details open>
@@ -219,6 +252,8 @@
     <div id="radBronner">
       <label class="kryss"><input type="checkbox" id="visBronner" checked><span id="tekstBronner">Brønner</span></label>
       <div class="forklaring"><span class="prikk prod">produsent</span><span class="prikk inj">injektor</span></div>
+      <label class="kryss innrykk" title="Koblingene mellom brønn og reservoar på valgt tidspunkt"><input type="checkbox" id="visPerf" checked>Perforasjoner
+        <span class="forklaring" style="margin:0"><span class="prikk perf">åpen</span><span class="prikk stengt">stengt</span></span></label>
     </div>
   </details>
 
@@ -253,6 +288,7 @@
   </div>
 </aside>
 
+<button id="apnePanel" class="kort" title="Vis panelet" aria-label="Vis panelet">»</button>
 <div id="celle" class="kort"></div>
 <div id="kompass" class="kort" title="Kompass: nåla peker mot nord"><svg viewBox="-23 -23 46 46" aria-hidden="true">
   <g id="nal"><path d="M0 -9 L5 6 L0 3 L-5 6 Z" fill="var(--feil)"/><path d="M0 17 L5 6 L0 9 L-5 6 Z" fill="var(--dempet)"/>
@@ -261,6 +297,8 @@
 <section id="kurver" class="kort" aria-label="Produksjonskurver">
   <header>
     <select id="kurveValg" aria-label="Vis kurver for"></select>
+    <select id="kurveMed" aria-label="Sammenlign med en annen brønn"></select>
+    <select id="kurveEkstra" aria-label="Legg til en egen kurve"></select>
     <span id="kurveLes"></span>
     <button id="kurveLukk" class="liten" aria-label="Lukk kurvene">Lukk</button>
   </header>
@@ -271,6 +309,8 @@
     <strong>Sammenligning</strong>
     <label class="kryss"><input type="checkbox" id="lasKamera" checked> Lås kamera</label>
     <label class="kryss"><input type="checkbox" id="lasValg" checked> Lås egenskap, tid og utsnitt</label>
+    <label class="kryss" title="Venstre modell farges etter forskjellen mot høyre, celle for celle"><input type="checkbox" id="visDiff"> Vis differanse (venstre − høyre)</label>
+    <span id="diffMelding" style="color:var(--feil)"></span>
     <button id="avsluttDelt" class="liten">Avslutt sammenligning</button>
   </div>
   <div class="ruter"></div>
@@ -284,8 +324,17 @@
       eller EGRID, INIT og UNRST fra en simulering. Brønnbaner kan slippes som tekstfiler (.dev, .csv, .txt).</p>
     <div class="knapper">
       <button class="primar" id="velg">Velg filer …</button>
+      <button id="apneNorne" title="Henter Norne-modellen (ca. 23 MB) fra OPMs åpne datasett">Åpne Norne-feltet</button>
       <button id="demo">Åpne eksempelmodell</button>
     </div>
+    <div class="knapper" id="radSist" style="display:none"><button id="apneSist"></button></div>
+    <details id="fraNett">
+      <summary>Åpne fra nettadresser</summary>
+      <textarea id="nettAdresser" rows="3" aria-label="Nettadresser, én per linje" placeholder="https://… (én fil per linje)"></textarea>
+      <div class="knapper"><button id="apneNett">Hent og åpne</button></div>
+    </details>
+    <p class="kilde">Norne: åpne data fra Equinor og lisenspartnerne, publisert av
+      <a href="https://github.com/OPM/opm-tests" target="_blank" rel="noopener">OPM</a> under Open Database License.</p>
     <div id="feil" role="alert"></div>
   </div>
 </div>

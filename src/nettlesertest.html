@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<title>Nettlesertester – Reservoarvisning</title>
+<style>
+  :root { --bg: #ffffff; --tekst: #17202a; --dempet: #5d6b7a; --ok: #1a8f3c; --feil: #b3261e; --kant: #d5dae0; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #12161b; --tekst: #e8edf2; --dempet: #98a5b3; --ok: #4fd67a; --feil: #ff8a80; --kant: #343d48; } }
+  body { margin: 0; display: grid; grid-template-columns: 380px 1fr; height: 100vh; background: var(--bg); color: var(--tekst); font: 13px/1.5 system-ui, sans-serif; }
+  #logg { padding: 14px 16px; overflow: auto; border-right: 1px solid var(--kant); }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  .ok::before { content: "✓ "; color: var(--ok); }
+  .feil::before { content: "✗ "; color: var(--feil); }
+  .feil small { display: block; color: var(--dempet); margin-left: 16px; }
+  #sum { font-weight: 600; margin-top: 10px; }
+  iframe { width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+<div id="logg"><h1>Nettlesertester</h1><div id="rader"></div><div id="sum">Kjører …</div></div>
+<iframe id="app" src="../index.html" title="Appen som testes"></iframe>
+<script>
+// Røyktester for det som bare kan prøves i en nettleser: lasting, tegning, filtre, kalkulator,
+// volumtabell, visninger, tverrsnitt og bildeeksport. Kjøres mot den syntetiske eksempelmodellen,
+// så de trenger ingen datafiler. Åpne siden via en lokal nettjener: src/nettlesertest.html
+'use strict';
+const ramme = document.getElementById('app');
+const pause = ms => new Promise(r => setTimeout(r, ms));
+let W, D, ok = 0, feil = 0;
+const $ = id => D.getElementById(id);
+async function til(sjekk, hva, ms = 15000) {
+  const t = performance.now();
+  while (!sjekk()) { if (performance.now() - t > ms) throw new Error('ventet forgjeves på ' + hva); await pause(40); }
+}
+async function ro() { await pause(120); await til(() => !W.APP.venter, 'at flatene blir ferdige'); await pause(160); }
+function hendelse(id, type) { $(id).dispatchEvent(new W.Event(type, { bubbles: true })); }
+async function sett(id, verdi, type = 'change') {
+  const e = $(id);
+  if (e.type === 'checkbox') e.checked = verdi; else e.value = verdi;
+  hendelse(id, type);
+  await ro();
+}
+function krev(betingelse, melding) { if (!betingelse) throw new Error(melding); }
+async function test(navn, f) {
+  const rad = document.createElement('div');
+  try { await f(); rad.className = 'ok'; rad.textContent = navn; ok++; }
+  catch (e) { rad.className = 'feil'; rad.textContent = navn; const s = document.createElement('small'); s.textContent = e.message; rad.appendChild(s); feil++; }
+  document.getElementById('rader').appendChild(rad);
+}
+
+ramme.addEventListener('load', async () => {
+  W = ramme.contentWindow; D = W.document;
+  try { W.localStorage.removeItem('reservoarvisning.visninger'); } catch (e) { /* uten lagring */ }
+
+  await test('eksempelmodellen lastes og tegnes', async () => {
+    await til(() => W.APP, 'appen');
+    $('demo').click();
+    await til(() => W.APP.grid && W.APP.hud && !W.APP.venter, 'modellen');
+    await ro();
+    krev(W.APP.grid.antAktive > 1000, 'for få aktive celler');
+    krev(W.APP.hud.antFlater > 100, 'ingen flater');
+    krev($('panel').style.display === 'block', 'panelet vises ikke');
+  });
+
+  await test('utsnitt og egenskapsfilter reduserer antall celler', async () => {
+    const alle = W.APP.hud.antCeller;
+    await sett('k1', 5, 'input');
+    const lag = W.APP.hud.antCeller;
+    krev(lag < alle && lag > 0, 'K-utsnittet virket ikke: ' + lag + ' av ' + alle);
+    const rad = $('filtre').children[0].children;
+    rad[0].value = 'PORO'; rad[1].value = String((W.APP.stat.min + W.APP.stat.max) / 2);
+    rad[1].dispatchEvent(new W.Event('input', { bubbles: true }));
+    await ro();
+    krev(W.APP.hud.antCeller < lag, 'filteret virket ikke');
+    rad[1].value = ''; rad[1].dispatchEvent(new W.Event('input', { bubbles: true }));
+    await sett('k1', W.APP.grid.nz, 'input');
+    krev(W.APP.hud.antCeller === alle, 'utsnittet ble ikke nullstilt');
+  });
+
+  await test('kalkulatoren lager en egenskap og avviser feil', async () => {
+    $('bNavn').value = 'DOBBEL'; $('bUttrykk').value = 'PORO * 2';
+    const maks = W.APP.grid.props.some(p => p.navn === 'PORO') && (await sett('egenskap', 'PORO'), W.APP.stat.max);
+    $('bLegg').click();
+    await til(() => W.APP.grid.props.some(p => p.navn === 'DOBBEL'), 'den beregnede egenskapen');
+    await ro(); await ro();
+    krev($('egenskap').value === 'DOBBEL', 'den nye egenskapen ble ikke valgt');
+    krev(Math.abs(W.APP.stat.max - 2 * maks) < 1e-4, 'maks ' + W.APP.stat.max + ' ≠ 2 × ' + maks);
+    $('bNavn').value = 'FEIL'; $('bUttrykk').value = 'PORO +';
+    $('bLegg').click();
+    await til(() => $('bFeil').textContent.length > 0, 'feilmeldingen');
+    krev(!W.APP.grid.props.some(p => p.navn === 'FEIL'), 'ugyldig uttrykk ble godtatt');
+  });
+
+  await test('volumtabellen per lag summerer til totalen', async () => {
+    await sett('fordel', 'K');
+    const rader = Array.from($('regioner').querySelectorAll('tr')).slice(1);
+    krev(rader.length === W.APP.grid.nz, rader.length + ' rader, ventet ' + W.APP.grid.nz);
+    const tall = s => parseFloat(s.replace(/\s/g, '').replace(',', '.'));
+    const sum = rader.reduce((s, r) => s + tall(r.children[1].textContent), 0);
+    const total = tall($('volum').querySelector('td:nth-child(2)').textContent);
+    krev(Math.abs(sum - total) / total < 0.02, 'sum ' + sum + ' ≠ total ' + total);
+    await sett('fordel', '');
+  });
+
+  await test('tidslinjen flytter brønnene og kan spilles av', async () => {
+    krev(W.APP.grid.tider.length > 1, 'modellen har ingen tidsakse');
+    W.APP.settSteg(0); await ro();
+    const tidlig = D.querySelectorAll('.etikett.bronn').length;
+    W.APP.settSteg(W.APP.grid.tider.length - 1); await ro();
+    krev(D.querySelectorAll('.etikett.bronn').length >= tidlig, 'brønner forsvant med tiden');
+    W.APP.settSteg(0);
+    $('spill').click();
+    await til(() => W.APP.steg > 0, 'at avspillingen går framover', 5000);
+    // Avspillingen stopper selv på siste steg; da ville et nytt klikk startet den på nytt.
+    if ($('spill').textContent !== '▶') $('spill').click();
+  });
+
+  await test('en lagret visning gjenskapes eksakt', async () => {
+    await sett('egenskap', 'PORO');
+    await sett('k1', 8, 'input');
+    await sett('zs', 7, 'input');
+    W.APP.settKamera({ p: [-3000, 2500, 1500], t: [100, 0, -50], zs: '7' });
+    await ro();
+    const A = JSON.stringify(W.APP.tilstand());
+    $('lagreVisning').click();
+    await sett('k1', W.APP.grid.nz, 'input');
+    await sett('egenskap', 'DOBBEL');
+    W.APP.tilpass(true); await ro();
+    krev(JSON.stringify(W.APP.tilstand()) !== A, 'tilstanden endret seg ikke');
+    D.querySelector('#visninger .visning button').click();
+    await ro(); await ro();
+    krev(JSON.stringify(W.APP.tilstand()) === A, 'tilstanden ble ikke gjenskapt');
+    krev(JSON.stringify(W.APP.dekod(W.APP.kod(JSON.parse(A)))) === A, 'lenkekodingen er ikke tapsfri');
+    D.querySelector('#visninger .visning button:last-child').click();
+  });
+
+  await test('tverrsnitt og kart gir flater, og 3D kommer tilbake', async () => {
+    const b = W.APP.grid.bbox, o = W.APP.grid.origo;
+    W.APP.visSnitt([[b.x0 - o[0], 0], [b.x1 - o[0], 0]]);
+    await ro(); await ro();
+    krev(W.APP.hud.antFlater > 10, 'snittet har ingen flater');
+    await sett('modus', 'kart:snitt');
+    krev(W.APP.hud.antFlater > 10, 'kartet har ingen flater');
+    await sett('modus', 'celler');
+    krev(W.APP.hud.antFlater > 100, '3D-visningen kom ikke tilbake');
+  });
+
+  await test('celleplukk treffer en celle midt i bildet', async () => {
+    W.APP.tilpass(false); await ro(); await pause(200);
+    const panel = $('panel').offsetWidth;
+    const c = W.APP.plukk(Math.round(panel + (W.innerWidth - panel) / 2), Math.round(W.innerHeight / 2));
+    krev(c >= 0, 'ingen celle under pekeren');
+  });
+
+  await test('bildeeksporten gir et bilde med innhold', async () => {
+    const c = W.APP.lagBilde(), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, farger = new Set();
+    for (let i = 0; i < d.length; i += 4 * 499) farger.add((d[i] >> 4) << 8 | (d[i + 1] >> 4) << 4 | d[i + 2] >> 4);
+    krev(c.width > 100 && farger.size > 8, 'bildet ser tomt ut (' + farger.size + ' farger)');
+  });
+
+  await test('sidepanelet kan skjules og vises', async () => {
+    $('skjulPanel').click(); await pause(100);
+    krev($('panel').style.display === 'none' && $('apnePanel').style.display === 'block', 'panelet ble ikke skjult');
+    $('apnePanel').click(); await pause(100);
+    krev($('panel').style.display === 'block', 'panelet kom ikke tilbake');
+  });
+
+  const sum = document.getElementById('sum');
+  sum.textContent = ok + ' av ' + (ok + feil) + ' tester besto';
+  sum.style.color = feil ? 'var(--feil)' : 'var(--ok)';
+  window.RESULTAT = { ok, feil };
+});
+</script>
+</body>
+</html>

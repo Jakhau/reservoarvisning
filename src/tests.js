@@ -474,5 +474,79 @@ test('filtre: flere egenskapsfiltre må alle være oppfylt, og NaN faller utenfo
   lik(GRID.hud(g, { filtre: [{ a: g.props.PERMX, pmin: 100, pmax: null }] }).antCeller, 2, 0, 'hud bruker samme filtre');
 });
 
+test('kalkulator: regneregler, funksjoner, avhengigheter og feilmeldinger', () => {
+  const P = { A: Float32Array.from([1, 2, 3, 4]), B: Float32Array.from([0, 1, 0.5, 2]) };
+  const r = t => Array.from(GRID.uttrykk(t).beregn(k => P[k], 4));
+  const like = (a, b, hva) => a.forEach((v, i) => { if (b[i] !== b[i]) { if (v === v) throw new Error(hva + ': ventet NaN'); } else lik(v, b[i], 1e-5, hva + ' [' + i + ']'); });
+  like(r('1 - A - B'), [0, -2, -2.5, -5], 'minus er venstreassosiativ');
+  like(r('a * b ^ 2'), [0, 2, 0.75, 16], 'potens før gange, navn uten hensyn til store/små');
+  like(r('2 ^ 3 ^ 2'), [512, 512, 512, 512], 'potens er høyreassosiativ');
+  like(r('-A + 2 * (B + 1)'), [1, 2, 0, 2], 'fortegn og parenteser');
+  like(r('A / B'), [NaN, 2, 6, 2], 'deling på null gir manglende verdi');
+  like(r('hvis(A > 2, A, 0)'), [0, 0, 3, 4], 'hvis');
+  like(r('max(A, 2.5) + min(B, 1)'), [2.5, 3.5, 3.5, 5], 'min/max');
+  like(r('ln(exp(A)) + log10(100) + sqrt(4) + abs(-1)'), [6, 7, 8, 9], 'funksjoner');
+  like(r('1.5e1'), [15, 15, 15, 15], 'konstant');
+  const dep = GRID.uttrykk('1 - SWAT - sgas * SWAT').avhenger;
+  if (dep.join() !== 'SWAT,SGAS') throw new Error('avhenger: ' + dep);
+  for (const t of ['A +', 'foo(A)', 'A B', 'min(A)', '', '(A', 'A $ B']) {
+    let kastet = false;
+    try { GRID.uttrykk(t); } catch (e) { kastet = /kan ikke tolkes/.test(e.message); }
+    if (!kastet) throw new Error('skulle gitt feil: «' + t + '»');
+  }
+  let ukjent = false;
+  try { GRID.uttrykk('A + C').beregn(k => P[k], 4); } catch (e) { ukjent = /Ukjent egenskap: C/.test(e.message); }
+  if (!ukjent) throw new Error('ukjent egenskap skal gi feil');
+});
+
+test('volumPer: summen over lag og regioner er lik totalen', () => {
+  const g = GRID.lagGrid(GRDECL.parseTekst(boksTekst(2, 1, 2, 'PORO\n0.2 0.3 0.1 0.4 /\nSWAT\n0.25 1 0.5 0 /\nFIPNUM\n1 2 2 1 /\n')));
+  const syn = GRID.synlige(g).syn, a = { poro: g.props.PORO, sw: g.props.SWAT }, tot = GRID.volum(g, syn, a);
+  for (const kl of [null, g.props.FIPNUM]) {
+    const rader = GRID.volumPer(g, syn, a, kl);
+    lik(rader.length, 2);
+    lik(rader.reduce((s, r) => s + r.bulk, 0), tot.bulk, 1); lik(rader.reduce((s, r) => s + r.pv, 0), tot.pv, 1);
+    lik(rader.reduce((s, r) => s + r.hcpv, 0), tot.hcpv, 1); lik(rader.reduce((s, r) => s + r.celler, 0), 4);
+  }
+  const V = GRID.cellevolum(g)[0], lag = GRID.volumPer(g, syn, a, null), fip = GRID.volumPer(g, syn, a, g.props.FIPNUM);
+  lik(lag[0].id, 1); lik(lag[0].pv, 0.5 * V, 1, 'lag 1: PORO 0,2 + 0,3');
+  lik(fip[0].id, 1); lik(fip[0].pv, 0.6 * V, 1, 'FIPNUM 1: PORO 0,2 + 0,4'); lik(fip[0].hcpv, (0.2 * 0.75 + 0.4) * V, 1);
+  // Bare utvalget telles.
+  lik(GRID.volumPer(g, GRID.synlige(g, { k0: 1, k1: 1 }).syn, a, null).length, 1);
+});
+
+test('brønner: åpning og stenging av koblinger og hele brønnen følger tiden', () => {
+  const kw = GRDECL.parseTekst(boksTekst(2, 1, 3, '') + [
+    'SCHEDULE', 'WELSPECS', " 'P1' 'G' 1 1 1* 'OIL' /", '/', 'COMPDAT', " 'P1' 1 1 1 2 'OPEN' /", '/',
+    'DATES', " 1 'JAN' 2001 /", '/', 'COMPDAT', " 'P1' 1 1 3 3 'SHUT' /", '/', 'WELOPEN', " 'P1' 'SHUT' 0 0 1 /", '/',
+    'DATES', " 1 'JAN' 2002 /", '/', 'WELOPEN', " 'P1' 'SHUT' /", '/', 'WCONHIST', " 'P1' 'OPEN' 'RESV' 100 /", '/',
+    'DATES', " 1 'JAN' 2003 /", '/', 'WCONHIST', " 'P1' 'SHUT' 'RESV' 0 /", '/', ''].join('\n'));
+  const g = GRID.lagGrid(kw), w = GRID.bronner(g, kw._poster, kw._hendelser)[0];
+  lik(w.antKoblinger, 3);
+  const t1 = Date.UTC(2001, 0, 1), t2 = Date.UTC(2002, 0, 1), t3 = Date.UTC(2003, 0, 1);
+  const kobling = (nr, t) => { let a = 1; for (const [tt, n, v] of w.apning) if (n === nr && tt <= t) a = v; return a; };
+  const bronn = t => { let a = 1; for (const [tt, v] of w.status) if (tt <= t) a = v; return a; };
+  lik(kobling(0, t1 - 1), 1, 0, 'øverste kobling er åpen fra start');
+  lik(kobling(0, t1), 0, 0, 'WELOPEN med K = 1 stenger øverste kobling');
+  lik(kobling(1, t1), 1, 0, 'koblingen under er fortsatt åpen');
+  lik(kobling(2, t1), 0, 0, 'COMPDAT med SHUT gir en stengt kobling');
+  lik(bronn(t1), 1); lik(bronn(t2), 1, 0, 'WCONHIST OPEN samme dato åpner brønnen igjen'); lik(bronn(t3), 0, 0, 'WCONHIST SHUT stenger brønnen');
+});
+
+test('rft: Norne fra OPM leses med dybde sortert (hoppes over uten testdata)', () => {
+  const fs = require('fs'), ECLBIN = require('./eclbin.js'), f = '../data/norne-sum/NORNE_ATW2013.RFT';
+  if (!fs.existsSync(f)) { console.log('      (ingen testdata i data/norne-sum)'); return; }
+  const k = ECLBIN.bufferKilde(fs.readFileSync(f)), idx = ECLBIN.indeks(k);
+  if (ECLBIN.filtype(idx) !== 'rft') throw new Error('filtype ' + ECLBIN.filtype(idx));
+  const r = ECLBIN.rft(k, idx);
+  if (r.length < 100) throw new Error('for få målinger: ' + r.length);
+  for (const e of r.slice(0, 200)) {
+    lik(e.dybde.length, e.trykk.length);
+    for (let i = 1; i < e.dybde.length; i++) if (e.dybde[i] < e.dybde[i - 1]) throw new Error('dybden er ikke sortert');
+    // Norne ligger på rundt 2500–2700 m med trykk rundt 250–280 bar.
+    if (!(e.dybde[0] > 2000 && e.dybde[0] < 3500 && e.trykk[0] > 50 && e.trykk[0] < 500)) throw new Error('urimelig måling: ' + e.dybde[0] + ' m, ' + e.trykk[0] + ' bar');
+  }
+});
+
 console.log(ok + ' av ' + (ok + feil) + ' tester besto');
 process.exit(feil ? 1 : 0);

@@ -443,6 +443,106 @@
     return { bulk, pv: harPv ? pv : null, hcpv: harPv && a.sw ? hc : null, gass: delt ? gass : null, olje: delt ? hc - gass : null };
   }
 
+  // Volumene fordelt på klasser: lag (K) når klasse er null, ellers heltallsverdien i klasse[c]
+  // (FIPNUM, EQLNUM …). Samme definisjoner som i volum(). Rader sortert etter klasse.
+  function volumPer(g, syn, a, klasse) {
+    const vol = cellevolum(g), nxy = g.nx * g.ny;
+    a = a || {};
+    const harPv = !!(a.porv || a.poro), rader = new Map();
+    for (let c = 0; c < g.n; c++) {
+      if (!syn[c]) continue;
+      const id = klasse ? Math.round(klasse[c]) : Math.floor(c / nxy) + 1;
+      if (id !== id) continue;
+      let r = rader.get(id);
+      if (!r) rader.set(id, r = { id, celler: 0, bulk: 0, pv: 0, hcpv: 0, gass: 0 });
+      r.celler++; r.bulk += vol[c];
+      if (!harPv) continue;
+      const p = a.porv ? a.porv[c] : vol[c] * a.poro[c] * (a.ntg ? a.ntg[c] : 1);
+      if (p !== p) continue;
+      r.pv += p;
+      if (a.sw) {
+        const s = a.sw[c];
+        if (s !== s) continue;
+        r.hcpv += p * (1 - s);
+        if (a.sg) { const sg = a.sg[c]; if (sg === sg) r.gass += p * Math.min(sg, 1 - s); }
+      }
+    }
+    const delt = harPv && a.sw && a.sg;
+    return Array.from(rader.values()).sort((x, y) => x.id - y.id).map(r => ({
+      id: r.id, celler: r.celler, bulk: r.bulk, pv: harPv ? r.pv : null, hcpv: harPv && a.sw ? r.hcpv : null,
+      gass: delt ? r.gass : null, olje: delt ? r.hcpv - r.gass : null }));
+  }
+
+  // ---------- egenskapskalkulator ----------
+  // Regneuttrykk over egenskaper, f.eks. «1 - SWAT - SGAS» eller «hvis(PORO > 0.2, PERMX * DZ, 0)».
+  // Støtter + − * / ^, sammenligninger (gir 1 eller 0), parenteser og funksjonene i FUNK.
+  // Uttrykket tolkes til et tre og regnes ut tabell for tabell – ingen eval av tekst.
+  // Returnerer { avhenger: [egenskapsnavn], beregn(hent, n) → Float32Array }.
+  const FUNK = {
+    abs: [1, Math.abs], sqrt: [1, Math.sqrt], exp: [1, Math.exp], ln: [1, Math.log], log10: [1, Math.log10],
+    min: [2, Math.min], max: [2, Math.max], hvis: [3, (b, x, y) => (b !== b ? NaN : b ? x : y)]
+  };
+  const OPER = {
+    '+': (x, y) => x + y, '-': (x, y) => x - y, '*': (x, y) => x * y, '/': (x, y) => x / y, '^': Math.pow,
+    '<': (x, y) => +(x < y), '>': (x, y) => +(x > y), '<=': (x, y) => +(x <= y), '>=': (x, y) => +(x >= y),
+    '==': (x, y) => +(x === y), '!=': (x, y) => +(x !== y)
+  };
+  function uttrykk(tekst) {
+    const tegn = String(tekst || '').match(/\s+|\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+|[A-Za-z_][A-Za-z0-9_]*|<=|>=|==|!=|[-+*/^()<>,]|./g) || [];
+    const t = tegn.filter(x => !/^\s+$/.test(x));
+    let p = 0;
+    const avhenger = [];
+    const feil = m => { throw new Error('Uttrykket kan ikke tolkes: ' + m); };
+    const tall = v => ({ k: 't', v }), bin = (o, a, b) => ({ k: 'f', f: OPER[o], a: [a, b] });
+    function atom() {
+      const x = t[p++];
+      if (x === undefined) feil('uttrykket slutter for tidlig');
+      if (x === '(') { const e = sml(); if (t[p++] !== ')') feil('mangler )'); return e; }
+      if (/^[\d.]/.test(x)) { const v = Number(x); if (v !== v) feil('ugyldig tall «' + x + '»'); return tall(v); }
+      if (/^[A-Za-z_]/.test(x)) {
+        if (t[p] !== '(') { const n = x.toUpperCase(); if (!avhenger.includes(n)) avhenger.push(n); return { k: 'e', n }; }
+        const f = FUNK[x.toLowerCase()];
+        if (!f) feil('ukjent funksjon «' + x + '»');
+        p++;
+        const a = [];
+        if (t[p] !== ')') { a.push(sml()); while (t[p] === ',') { p++; a.push(sml()); } }
+        if (t[p++] !== ')') feil('mangler ) etter ' + x);
+        if (a.length !== f[0]) feil(x + ' tar ' + f[0] + ' argument' + (f[0] > 1 ? 'er' : ''));
+        return { k: 'f', f: f[1], a };
+      }
+      feil('uventet «' + x + '»');
+    }
+    function pot() { const a = atom(); if (t[p] === '^') { p++; return bin('^', a, fortegn()); } return a; }
+    function fortegn() { if (t[p] === '-') { p++; return bin('-', tall(0), fortegn()); } if (t[p] === '+') { p++; return fortegn(); } return pot(); }
+    function ledd() { let a = fortegn(); while (t[p] === '*' || t[p] === '/') { const o = t[p++]; a = bin(o, a, fortegn()); } return a; }
+    function sum() { let a = ledd(); while (t[p] === '+' || t[p] === '-') { const o = t[p++]; a = bin(o, a, ledd()); } return a; }
+    function sml() { const a = sum(); if (OPER[t[p]] && /[<>=!]/.test(t[p])) { const o = t[p++]; return bin(o, a, sum()); } return a; }
+    if (!t.length) feil('uttrykket er tomt');
+    const tre = sml();
+    if (p < t.length) feil('uventet «' + t[p] + '»');
+    function regn(node, hent, n) {
+      if (node.k === 't') return node.v;
+      if (node.k === 'e') { const a = hent(node.n); if (!a) throw new Error('Ukjent egenskap: ' + node.n); return a; }
+      const arg = node.a.map(x => regn(x, hent, n)), f = node.f;
+      if (arg.every(x => typeof x === 'number')) return f(...arg);
+      const ut = new Float32Array(n), A = arg[0], B = arg[1], C = arg[2];
+      const sa = typeof A === 'number', sb = typeof B === 'number', sc = typeof C === 'number';
+      if (arg.length === 1) for (let c = 0; c < n; c++) ut[c] = f(A[c]);
+      else if (arg.length === 2) for (let c = 0; c < n; c++) ut[c] = f(sa ? A : A[c], sb ? B : B[c]);
+      else for (let c = 0; c < n; c++) ut[c] = f(sa ? A : A[c], sb ? B : B[c], sc ? C : C[c]);
+      return ut;
+    }
+    return {
+      avhenger,
+      beregn(hent, n) {
+        const r = regn(tre, hent, n);
+        if (typeof r === 'number') return new Float32Array(n).fill(r);
+        for (let c = 0; c < n; c++) if (!isFinite(r[c])) r[c] = NaN;   // deling på null o.l. vises som manglende verdi
+        return r;
+      }
+    };
+  }
+
   // ---------- tverrsnitt ----------
   // Pilarenes kartposisjon i modellens middeldybde; brukes til å finne hvilken kolonne et punkt ligger i.
   function pilarXY(g) {
@@ -704,7 +804,7 @@
     const { nx, ny, nz, bbox, origo } = g, nxy = nx * ny;
     if (!hendelser) {
       hendelser = [];
-      for (const n of ['WELSPECS', 'COMPDAT', 'WCONHIST', 'WCONPROD', 'WCONINJE', 'WCONINJH']) for (const r of (poster || {})[n] || []) hendelser.push([n, r]);
+      for (const n of ['WELSPECS', 'COMPDAT', 'WCONHIST', 'WCONPROD', 'WCONINJE', 'WCONINJH', 'WELOPEN']) for (const r of (poster || {})[n] || []) hendelser.push([n, r]);
     }
     const kartet = new Map();
     let t = -Infinity;
@@ -712,7 +812,7 @@
       if (n === 'DATES') { const d = datoAv(r); if (d != null) t = d; continue; }
       if (typeof r[0] !== 'string') continue;
       if (n === 'WELSPECS') {
-        if (!kartet.has(r[0])) kartet.set(r[0], { navn: r[0], gruppe: r[1], hi: (r[2] | 0) - 1, hj: (r[3] | 0) - 1, celler: [], tider: [], sett: new Set(), typer: [] });
+        if (!kartet.has(r[0])) kartet.set(r[0], { navn: r[0], gruppe: r[1], hi: (r[2] | 0) - 1, hj: (r[3] | 0) - 1, celler: [], tider: [], sett: new Map(), typer: [], apning: [], status: [] });
         continue;
       }
       const w = kartet.get(r[0]);
@@ -723,10 +823,23 @@
         const k1 = r[3] - 1, k2 = Math.min(nz, r[4] > 0 ? r[4] : r[3]) - 1;
         for (let k = k1; k <= k2; k++) {
           const c = i + nx * j + nxy * k;
-          if (!w.sett.has(c)) { w.sett.add(c); w.celler.push(c); w.tider.push(t); }
+          if (!w.sett.has(c)) { w.sett.set(c, w.celler.length); w.celler.push(c); w.tider.push(t); }
+          // COMPDAT kan gjentas for å åpne eller stenge en kobling senere (felt 6: OPEN/SHUT).
+          w.apning.push([t, w.sett.get(c), typeof r[5] === 'string' && /^SHUT/i.test(r[5]) ? 0 : 1]);
         }
+      } else if (n === 'WELOPEN') {
+        // Uten I, J, K gjelder åpningen eller stengingen hele brønnen, ellers de koblingene som passer.
+        const apen = typeof r[1] === 'string' && /^(SHUT|STOP)/i.test(r[1]) ? 0 : 1;
+        const [i, j, k] = [r[2], r[3], r[4]].map(v => (v > 0 ? v - 1 : -1));
+        if (i < 0 && j < 0 && k < 0) w.status.push([t, apen]);
+        else w.celler.forEach((c, nr) => {
+          if ((i < 0 || c % nx === i) && (j < 0 || Math.floor(c / nx) % ny === j) && (k < 0 || Math.floor(c / nxy) === k)) w.apning.push([t, nr, apen]);
+        });
       } else if (n.startsWith('WCON')) {
         const inj = n === 'WCONINJE' || n === 'WCONINJH';
+        // Status står i felt 2 for produsenter og felt 3 for injektorer.
+        const st = r[inj ? 2 : 1];
+        if (typeof st === 'string') w.status.push([t, /^(SHUT|STOP)/i.test(st) ? 0 : 1]);
         const fase = inj && typeof r[1] === 'string' ? r[1].toUpperCase() : null;
         const siste = w.typer[w.typer.length - 1];
         // Står brønnen i begge listene på samme tidspunkt, regnes den som injektor.
@@ -753,7 +866,7 @@
       w.celler.forEach((c, n) => senter(c, 3 * (n + 1)));
       const siste = w.typer[w.typer.length - 1];
       ut.push({ navn: w.navn, gruppe: w.gruppe, type: siste ? siste[1] : null, fase: siste ? siste[2] : null, typer: w.typer,
-        punkter: pkt, tider: Float64Array.from(w.tider), antKoblinger: w.celler.length });
+        punkter: pkt, tider: Float64Array.from(w.tider), antKoblinger: w.celler.length, apning: w.apning, status: w.status });
     }
     return ut;
   }
@@ -888,7 +1001,7 @@
   }
 
   const GRID = { lagGrid, hjorner, hud, flateAttributter, statistikk, syntetisk, fraBlokk, forkastninger, bronner, tidspunkter,
-    brukOperasjoner, kartakser, enhetFaktor, enhetSI, synlige, cellevolum, volum, snitt, kart, baneTekst, baneTil3D, FLATER };
+    brukOperasjoner, kartakser, enhetFaktor, enhetSI, synlige, cellevolum, volum, volumPer, uttrykk, snitt, kart, baneTekst, baneTil3D, FLATER };
   root.GRID = GRID;
   if (typeof module !== 'undefined' && module.exports) module.exports = GRID;
 })(typeof self !== 'undefined' ? self : globalThis);
